@@ -1,25 +1,73 @@
 import * as readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createServer as createHttpsServer } from 'node:https';
+import { resolve } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { ChatSession } from '../session.js';
+import { generateNonce, verifyChallenge } from '../auth.js';
+import { findLatestSession } from '../persistence.js';
 import type { WireMessage } from '../protocol.js';
 
 interface ServeOptions {
   port: string;
   model: string;
+  workspace: string;
+  resume?: string;
+  continue?: boolean;
+  yolo?: boolean;
+  cert?: string;
+  key?: string;
 }
+
+const MAX_AUTH_ATTEMPTS = 3;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
 export async function serveCommand(options: ServeOptions): Promise<void> {
   const token = process.env.AI3_REMOTE_TOKEN ?? randomBytes(16).toString('hex');
   const port = Number(options.port);
-  const session = new ChatSession(options.model);
+  const workspaceRoot = resolve(options.workspace);
+  const resumeId = options.resume ?? (options.continue ? findLatestSession()?.id : undefined);
+
+  const confirm = options.yolo
+    ? async () => true
+    : async (description: string) => {
+        const answer = await hostRl.question(`Allow ${description}? [y/N] `);
+        return answer.trim().toLowerCase() === 'y';
+      };
+
+  const session = new ChatSession({ model: options.model, workspaceRoot, confirm, resumeId });
   const clients = new Set<WebSocket>();
+  const attemptsByIp = new Map<string, number[]>();
 
-  const wss = new WebSocketServer({ port });
+  session.on('tool', ({ name, input }) => {
+    stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
+    broadcast({ type: 'tool', name, input });
+  });
 
-  wss.on('connection', (socket) => {
+  const wss = options.cert && options.key
+    ? new WebSocketServer({
+        server: createHttpsServer({
+          cert: readFileSync(options.cert),
+          key: readFileSync(options.key),
+        }).listen(port),
+      })
+    : new WebSocketServer({ port });
+
+  wss.on('connection', (socket, request) => {
+    const ip = request.socket.remoteAddress ?? 'unknown';
+    if (isRateLimited(ip)) {
+      send(socket, { type: 'error', text: 'rate limited' });
+      socket.close();
+      return;
+    }
+
+    const nonce = generateNonce();
+    let attempts = 0;
     let authed = false;
+    send(socket, { type: 'challenge', nonce });
 
     socket.on('message', (raw, isBinary) => {
       void handleIncoming(isBinary ? raw.toString() : raw.toString('utf8'));
@@ -30,21 +78,28 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     async function handleIncoming(raw: string): Promise<void> {
       let message: WireMessage;
       try {
-        message = JSON.parse(raw.toString());
+        message = JSON.parse(raw);
       } catch {
         send(socket, { type: 'error', text: 'invalid message' });
         return;
       }
 
       if (!authed) {
-        if (message.type === 'auth' && message.token === token) {
-          authed = true;
-          clients.add(socket);
-          stdout.write('\n[remote client connected]\n');
-        } else {
+        if (message.type !== 'auth') {
+          send(socket, { type: 'error', text: 'expected auth' });
+          return;
+        }
+        attempts += 1;
+        recordAttempt(ip);
+        if (attempts > MAX_AUTH_ATTEMPTS || !verifyChallenge(token, nonce, message.hmac)) {
           send(socket, { type: 'error', text: 'unauthorized' });
           socket.close();
+          return;
         }
+        authed = true;
+        clients.add(socket);
+        send(socket, { type: 'authed' });
+        stdout.write('\n[remote client connected]\n');
         return;
       }
 
@@ -67,13 +122,29 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     }
   }
 
-  stdout.write(`ai3 serve — listening on ws://localhost:${port}\n`);
-  stdout.write(`Share this token with attach clients: ${token}\n`);
-  stdout.write(`Type here to chat locally too. Ctrl+C to stop.\n\n`);
+  function isRateLimited(ip: string): boolean {
+    const now = Date.now();
+    const attempts = (attemptsByIp.get(ip) ?? []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+    attemptsByIp.set(ip, attempts);
+    return attempts.length >= RATE_LIMIT_MAX_ATTEMPTS;
+  }
 
-  const rl = readline.createInterface({ input: stdin, output: stdout });
+  function recordAttempt(ip: string): void {
+    const attempts = attemptsByIp.get(ip) ?? [];
+    attempts.push(Date.now());
+    attemptsByIp.set(ip, attempts);
+  }
+
+  const scheme = options.cert && options.key ? 'wss' : 'ws';
+  stdout.write(
+    `ai3 serve — listening on ${scheme}://localhost:${port}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
+      `Share this token with attach clients (never sent over the wire): ${token}\n` +
+      `Type here to chat locally too. Ctrl+C to stop.\n\n`,
+  );
+
+  const hostRl = readline.createInterface({ input: stdin, output: stdout });
   while (true) {
-    const input = await rl.question('you> ');
+    const input = await hostRl.question('you> ');
     if (!input.trim()) {
       continue;
     }

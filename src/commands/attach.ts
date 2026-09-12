@@ -1,6 +1,7 @@
 import * as readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import WebSocket from 'ws';
+import { signChallenge } from '../auth.js';
 import type { WireMessage } from '../protocol.js';
 
 export async function attachCommand(address: string): Promise<void> {
@@ -9,22 +10,37 @@ export async function attachCommand(address: string): Promise<void> {
 
   const socket = new WebSocket(address);
 
-  await new Promise<void>((resolve, reject) => {
-    socket.once('open', resolve);
+  await new Promise<void>((resolveOpen, reject) => {
+    socket.once('open', resolveOpen);
     socket.once('error', reject);
   });
 
-  send(socket, { type: 'auth', token });
-  stdout.write(`ai3 attach — connected to ${address}. Type "exit" to quit.\n\n`);
+  const authed = new Promise<void>((resolveAuthed, reject) => {
+    socket.on('message', (raw) => {
+      const message = JSON.parse(raw.toString()) as WireMessage;
 
-  socket.on('message', (raw) => {
-    const message = JSON.parse(raw.toString()) as WireMessage;
-    if (message.type === 'assistant') {
-      stdout.write(`\nassistant> ${message.text}\n\n`);
-    } else if (message.type === 'error') {
-      stdout.write(`\n[error] ${message.text}\n`);
-    }
+      if (message.type === 'challenge') {
+        send(socket, { type: 'auth', hmac: signChallenge(token, message.nonce) });
+        return;
+      }
+      if (message.type === 'authed') {
+        resolveAuthed();
+        return;
+      }
+      if (message.type === 'error') {
+        reject(new Error(message.text));
+        return;
+      }
+      if (message.type === 'assistant') {
+        stdout.write(`\nassistant> ${message.text}\n\n`);
+      } else if (message.type === 'tool') {
+        stdout.write(`\n[tool] ${message.name} ${JSON.stringify(message.input)}\n`);
+      }
+    });
   });
+
+  await authed;
+  stdout.write(`ai3 attach — connected to ${address}. Type "exit" to quit.\n\n`);
 
   try {
     while (true) {

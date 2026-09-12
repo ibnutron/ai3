@@ -1,4 +1,7 @@
+import { EventEmitter } from 'node:events';
 import Anthropic from '@anthropic-ai/sdk';
+import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
+import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
 
 type MessageParam = Anthropic.MessageParam;
 
@@ -6,41 +9,114 @@ export interface ChatTurnResult {
   reply: string;
 }
 
-/**
- * Holds the running conversation for one chat session and talks to the
- * Anthropic API. Shared by the local `chat` command and the `serve` command
- * so a remote `attach` client sees the exact same conversation state.
- */
-export class ChatSession {
-  private readonly client: Anthropic;
-  private readonly history: MessageParam[] = [];
+export interface ChatSessionOptions {
+  model: string;
+  workspaceRoot: string;
+  confirm: ConfirmFn;
+  apiKey?: string;
+  resumeId?: string;
+}
 
-  constructor(
-    private readonly model: string,
-    apiKey = process.env.ANTHROPIC_API_KEY,
-  ) {
+/**
+ * Holds the running conversation for one chat session, drives the
+ * tool-call loop against the Anthropic API, and persists history to disk
+ * after every turn. Shared by the local `chat` command and the `serve`
+ * command so a remote `attach` client sees the exact same conversation.
+ *
+ * Emits a `'tool'` event `{ name, input }` whenever a tool call runs, so a
+ * host UI (or a `serve` broadcaster) can show tool activity as it happens.
+ */
+export class ChatSession extends EventEmitter {
+  private readonly client: Anthropic;
+  private readonly model: string;
+  private readonly workspaceRoot: string;
+  private readonly confirm: ConfirmFn;
+  private readonly id: string;
+  private readonly createdAt: string;
+  private history: MessageParam[];
+
+  constructor(options: ChatSessionOptions) {
+    super();
+    const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error('ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in.');
     }
+
     this.client = new Anthropic({ apiKey });
+    this.model = options.model;
+    this.workspaceRoot = options.workspaceRoot;
+    this.confirm = options.confirm;
+
+    if (options.resumeId) {
+      const record = loadSession(options.resumeId);
+      this.id = record.id;
+      this.createdAt = record.createdAt;
+      this.history = record.history;
+    } else {
+      this.id = generateSessionId();
+      this.createdAt = new Date().toISOString();
+      this.history = [];
+    }
+  }
+
+  get sessionId(): string {
+    return this.id;
   }
 
   async send(userMessage: string): Promise<ChatTurnResult> {
     this.history.push({ role: 'user', content: userMessage });
 
-    const response = await this.client.messages.create({
+    while (true) {
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 4096,
+        tools: TOOL_SCHEMAS,
+        messages: this.history,
+      });
+
+      this.history.push({ role: 'assistant', content: response.content });
+      this.persist();
+
+      if (response.stop_reason !== 'tool_use') {
+        const reply = response.content
+          .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n');
+        return { reply };
+      }
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const block of response.content) {
+        if (block.type !== 'tool_use') {
+          continue;
+        }
+        this.emit('tool', { name: block.name, input: block.input });
+        let content: string;
+        try {
+          content = await executeTool(block.name, block.input as Record<string, unknown>, {
+            workspaceRoot: this.workspaceRoot,
+            confirm: this.confirm,
+          });
+        } catch (error) {
+          content = `Error: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
+      }
+
+      this.history.push({ role: 'user', content: toolResults });
+      this.persist();
+    }
+  }
+
+  private persist(): void {
+    const record: SessionRecord = {
+      id: this.id,
       model: this.model,
-      max_tokens: 4096,
-      messages: this.history,
-    });
-
-    const reply = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n');
-
-    this.history.push({ role: 'assistant', content: reply });
-
-    return { reply };
+      workspace: this.workspaceRoot,
+      createdAt: this.createdAt,
+      updatedAt: new Date().toISOString(),
+      history: this.history,
+    };
+    saveSession(record);
   }
 }
