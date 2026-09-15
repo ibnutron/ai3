@@ -42,6 +42,33 @@ finds the key. Variables already exported in the environment take precedence.
   self-signed cert or one from Tailscale/Let's Encrypt, for confidentiality
   when attaching over a real network instead of localhost.
 
+## Wire protocol (for building other clients)
+
+`serve` speaks newline-free JSON messages over a single WebSocket. Any client
+(web page, mobile app, editor extension) can implement it:
+
+1. Server → `{type:"challenge", nonce}`; client → `{type:"auth", hmac}` where
+   `hmac = hex(HMAC-SHA256(key = token, message = nonce))`. Wrong answer →
+   `{type:"error", text:"unauthorized"}` and the socket closes (3 attempts per
+   socket, 5 per IP per minute).
+2. Server → `{type:"authed", sessionId, workspace, model, history}` where
+   `history` is the conversation so far, flattened for rendering:
+   `{role:"user"|"assistant", text}` and `{role:"tool", name, input, result}`.
+3. Client → `{type:"user", text}` starts a turn. While it runs the server sends
+   `{type:"busy"}`, then per tool call `{type:"tool", name, input}` and
+   `{type:"tool_result", name, result}`, then `{type:"assistant", text}` and
+   `{type:"idle"}`. A `user` message sent while busy gets `error: "busy"`.
+   Other connected clients receive the same `user` message so they stay in sync.
+4. Unless the host runs with `--yolo`, mutating tools (`write_file`,
+   `edit_file`, `run_bash`) pause with `{type:"confirm", id, description}` sent
+   to every client and printed on the host terminal. The first answer wins —
+   a client replies `{type:"confirm_reply", id, allow:true|false}`, or the host
+   operator types `y`/`n`. No answer within 5 minutes counts as denied.
+
+The token never crosses the wire, but everything else does: use `wss://` (see
+production notes below) whenever the connection leaves localhost. Browsers
+also refuse `ws://` from an `https://` page.
+
 ## Remote-controlling another repo
 
 Any repo can expose its own `ai3 serve`, rooted at that repo, via an npm

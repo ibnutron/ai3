@@ -3,13 +3,16 @@ import { stdin, stdout } from 'node:process';
 import WebSocket from 'ws';
 import { signChallenge } from '../auth.js';
 import { ask } from '../prompt.js';
-import type { WireMessage } from '../protocol.js';
+import type { HistoryItem, WireMessage } from '../protocol.js';
+
+const RESULT_PREVIEW_CHARS = 300;
 
 export async function attachCommand(address: string): Promise<void> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
   const token = process.env.AI3_REMOTE_TOKEN ?? (await rl.question('Remote token: '));
 
   const socket = new WebSocket(address);
+  const pendingConfirms: string[] = [];
 
   await new Promise<void>((resolveOpen, reject) => {
     socket.once('open', resolveOpen);
@@ -20,22 +23,47 @@ export async function attachCommand(address: string): Promise<void> {
     socket.on('message', (raw) => {
       const message = JSON.parse(raw.toString()) as WireMessage;
 
-      if (message.type === 'challenge') {
-        send(socket, { type: 'auth', hmac: signChallenge(token, message.nonce) });
-        return;
-      }
-      if (message.type === 'authed') {
-        resolveAuthed();
-        return;
-      }
-      if (message.type === 'error') {
-        reject(new Error(message.text));
-        return;
-      }
-      if (message.type === 'assistant') {
-        stdout.write(`\nassistant> ${message.text}\n\n`);
-      } else if (message.type === 'tool') {
-        stdout.write(`\n[tool] ${message.name} ${JSON.stringify(message.input)}\n`);
+      switch (message.type) {
+        case 'challenge':
+          send(socket, { type: 'auth', hmac: signChallenge(token, message.nonce) });
+          return;
+        case 'authed':
+          stdout.write(`session ${message.sessionId} — model ${message.model}, workspace ${message.workspace}\n`);
+          for (const item of message.history) {
+            renderHistoryItem(item);
+          }
+          resolveAuthed();
+          return;
+        case 'error':
+          if (message.text === 'unauthorized' || message.text === 'rate limited') {
+            reject(new Error(message.text));
+          } else {
+            stdout.write(`\n[error] ${message.text}\n`);
+          }
+          return;
+        case 'user':
+          stdout.write(`\nother> ${message.text}\n`);
+          return;
+        case 'assistant':
+          stdout.write(`\nassistant> ${message.text}\n\n`);
+          return;
+        case 'tool':
+          stdout.write(`\n[tool] ${message.name} ${JSON.stringify(message.input)}\n`);
+          return;
+        case 'tool_result':
+          stdout.write(`[tool_result] ${message.name}: ${preview(message.result)}\n`);
+          return;
+        case 'confirm':
+          pendingConfirms.push(message.id);
+          stdout.write(`\n[confirm] Allow ${message.description}? Type y or n.\n`);
+          return;
+        case 'busy':
+          stdout.write('[working…]\n');
+          return;
+        case 'idle':
+        case 'auth':
+        case 'confirm_reply':
+          return;
       }
     });
   });
@@ -49,7 +77,13 @@ export async function attachCommand(address: string): Promise<void> {
       if (input === null || input.trim().toLowerCase() === 'exit') {
         break;
       }
-      if (!input.trim()) {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        continue;
+      }
+      if (pendingConfirms.length > 0 && /^[yn]$/i.test(trimmed)) {
+        const id = pendingConfirms.shift() as string;
+        send(socket, { type: 'confirm_reply', id, allow: trimmed.toLowerCase() === 'y' });
         continue;
       }
       send(socket, { type: 'user', text: input });
@@ -58,6 +92,21 @@ export async function attachCommand(address: string): Promise<void> {
     rl.close();
     socket.close();
   }
+}
+
+function renderHistoryItem(item: HistoryItem): void {
+  if (item.role === 'user') {
+    stdout.write(`you> ${item.text}\n`);
+  } else if (item.role === 'assistant') {
+    stdout.write(`assistant> ${item.text}\n\n`);
+  } else {
+    stdout.write(`[tool] ${item.name} ${JSON.stringify(item.input)} → ${preview(item.result)}\n`);
+  }
+}
+
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > RESULT_PREVIEW_CHARS ? `${flat.slice(0, RESULT_PREVIEW_CHARS)}…` : flat;
 }
 
 function send(socket: WebSocket, message: WireMessage): void {

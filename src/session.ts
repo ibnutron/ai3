@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import Anthropic from '@anthropic-ai/sdk';
 import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
 import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
+import type { HistoryItem } from './protocol.js';
 
 type MessageParam = Anthropic.MessageParam;
 
@@ -23,8 +24,9 @@ export interface ChatSessionOptions {
  * after every turn. Shared by the local `chat` command and the `serve`
  * command so a remote `attach` client sees the exact same conversation.
  *
- * Emits a `'tool'` event `{ name, input }` whenever a tool call runs, so a
- * host UI (or a `serve` broadcaster) can show tool activity as it happens.
+ * Emits a `'tool'` event `{ name, input }` when a tool call starts and a
+ * `'tool_result'` event `{ name, result }` when it finishes, so a host UI (or
+ * a `serve` broadcaster) can show tool activity as it happens.
  */
 export class ChatSession extends EventEmitter {
   private readonly client: Anthropic;
@@ -61,6 +63,47 @@ export class ChatSession extends EventEmitter {
 
   get sessionId(): string {
     return this.id;
+  }
+
+  get modelId(): string {
+    return this.model;
+  }
+
+  get workspace(): string {
+    return this.workspaceRoot;
+  }
+
+  /** Conversation flattened to what a client renders (tool_use/tool_result pairs joined by id). */
+  renderHistory(): HistoryItem[] {
+    const items: HistoryItem[] = [];
+    const pendingTools = new Map<string, { name: string; input: unknown }>();
+
+    for (const message of this.history) {
+      if (typeof message.content === 'string') {
+        items.push({ role: message.role, text: message.content });
+        continue;
+      }
+
+      for (const block of message.content) {
+        if (block.type === 'text' && block.text.trim()) {
+          items.push({ role: message.role, text: block.text });
+        } else if (block.type === 'tool_use') {
+          pendingTools.set(block.id, { name: block.name, input: block.input });
+        } else if (block.type === 'tool_result') {
+          const call = pendingTools.get(block.tool_use_id);
+          const result =
+            typeof block.content === 'string'
+              ? block.content
+              : (block.content ?? [])
+                  .map((part) => (part.type === 'text' ? part.text : ''))
+                  .join('');
+          items.push({ role: 'tool', name: call?.name ?? 'unknown', input: call?.input, result });
+          pendingTools.delete(block.tool_use_id);
+        }
+      }
+    }
+
+    return items;
   }
 
   async send(userMessage: string): Promise<ChatTurnResult> {
@@ -100,6 +143,7 @@ export class ChatSession extends EventEmitter {
         } catch (error) {
           content = `Error: ${error instanceof Error ? error.message : String(error)}`;
         }
+        this.emit('tool_result', { name: block.name, result: content });
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
       }
 
