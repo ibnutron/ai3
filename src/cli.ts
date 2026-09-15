@@ -1,9 +1,15 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 import { Command } from 'commander';
 import { chatCommand } from './commands/chat.js';
 import { serveCommand } from './commands/serve.js';
 import { attachCommand } from './commands/attach.js';
 import { sessionsListCommand } from './commands/sessions.js';
+
+loadPackageEnv();
 
 const program = new Command();
 
@@ -41,3 +47,21 @@ const sessions = program.command('sessions').description('Manage saved chat sess
 sessions.command('list').description('List saved sessions').action(sessionsListCommand);
 
 program.parse();
+
+/**
+ * Loads the `.env` that sits next to this package (not the caller's cwd, so
+ * `ai3 serve` launched from another repo's npm script still finds the key).
+ * Variables already present in the environment win over the file.
+ */
+function loadPackageEnv(): void {
+  const envPath = join(dirname(fileURLToPath(import.meta.url)), '..', '.env');
+  let contents: string;
+  try {
+    contents = readFileSync(envPath, 'utf8');
+  } catch {
+    return;
+  }
+  for (const [key, value] of Object.entries(parseEnv(contents))) {
+    process.env[key] ??= value;
+  }
+}

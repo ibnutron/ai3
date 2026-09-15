@@ -2,6 +2,7 @@ import * as readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import WebSocket from 'ws';
 import { signChallenge } from '../auth.js';
+import { ask } from '../prompt.js';
 import type { WireMessage } from '../protocol.js';
 
 export async function attachCommand(address: string): Promise<void> {
@@ -44,8 +45,8 @@ export async function attachCommand(address: string): Promise<void> {
 
   try {
     while (true) {
-      const input = await rl.question('you> ');
-      if (input.trim().toLowerCase() === 'exit') {
+      const input = await ask(rl, 'you> ');
+      if (input === null || input.trim().toLowerCase() === 'exit') {
         break;
       }
       if (!input.trim()) {

@@ -8,6 +8,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { ChatSession } from '../session.js';
 import { generateNonce, verifyChallenge } from '../auth.js';
 import { findLatestSession } from '../persistence.js';
+import { ask } from '../prompt.js';
 import type { WireMessage } from '../protocol.js';
 
 interface ServeOptions {
@@ -34,8 +35,8 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
   const confirm = options.yolo
     ? async () => true
     : async (description: string) => {
-        const answer = await hostRl.question(`Allow ${description}? [y/N] `);
-        return answer.trim().toLowerCase() === 'y';
+        const answer = await ask(hostRl, `Allow ${description}? [y/N] `);
+        return answer?.trim().toLowerCase() === 'y';
       };
 
   const session = new ChatSession({ model: options.model, workspaceRoot, confirm, resumeId });
@@ -144,7 +145,13 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
 
   const hostRl = readline.createInterface({ input: stdin, output: stdout });
   while (true) {
-    const input = await hostRl.question('you> ');
+    const input = await ask(hostRl, 'you> ');
+    if (input === null) {
+      // stdin closed (e.g. launched from a non-interactive npm script) — keep
+      // serving remote clients; the process ends on Ctrl+C or when killed.
+      stdout.write('[local stdin closed — serving remote clients only]\n');
+      return new Promise<never>(() => {});
+    }
     if (!input.trim()) {
       continue;
     }

@@ -3,6 +3,7 @@ import { stdin, stdout } from 'node:process';
 import { resolve } from 'node:path';
 import { ChatSession } from '../session.js';
 import { findLatestSession } from '../persistence.js';
+import { ask } from '../prompt.js';
 
 interface ChatOptions {
   model: string;
@@ -21,8 +22,8 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
   const confirm = options.yolo
     ? async () => true
     : async (description: string) => {
-        const answer = await rl.question(`Allow ${description}? [y/N] `);
-        return answer.trim().toLowerCase() === 'y';
+        const answer = await ask(rl, `Allow ${description}? [y/N] `);
+        return answer?.trim().toLowerCase() === 'y';
       };
 
   const session = new ChatSession({ model: options.model, workspaceRoot, confirm, resumeId });
@@ -38,8 +39,8 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
 
   try {
     while (true) {
-      const input = await rl.question('you> ');
-      if (input.trim().toLowerCase() === 'exit') {
+      const input = await ask(rl, 'you> ');
+      if (input === null || input.trim().toLowerCase() === 'exit') {
         break;
       }
       if (!input.trim()) {

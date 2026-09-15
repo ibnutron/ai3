@@ -13,6 +13,10 @@ npm run build
 npm link                # puts the `ai3` binary on PATH globally
 ```
 
+The `.env` next to the package is loaded automatically on every `ai3` invocation
+(regardless of the current directory), so `npm run code` from another repo still
+finds the key. Variables already exported in the environment take precedence.
+
 ## Commands
 
 - `ai3 chat` — interactive chat with tool-use (file read/write/edit, `run_bash`)
