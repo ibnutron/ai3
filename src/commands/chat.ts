@@ -33,7 +33,7 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
   });
 
   stdout.write(
-    `ai3 chat — model ${options.model}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
+    `aiocli chat — model ${options.model}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
       `Type "exit" to quit.\n`,
   );
 

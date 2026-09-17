@@ -28,7 +28,7 @@ const RATE_LIMIT_MAX_ATTEMPTS = 5;
 const CONFIRM_TIMEOUT_MS = 5 * 60_000;
 
 export async function serveCommand(options: ServeOptions): Promise<void> {
-  const token = process.env.AI3_REMOTE_TOKEN ?? randomBytes(16).toString('hex');
+  const token = process.env.AIOCLI_REMOTE_TOKEN ?? randomBytes(16).toString('hex');
   const port = Number(options.port);
   const workspaceRoot = resolve(options.workspace);
   const resumeId = options.resume ?? (options.continue ? findLatestSession()?.id : undefined);
@@ -192,7 +192,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
 
   const scheme = options.cert && options.key ? 'wss' : 'ws';
   stdout.write(
-    `ai3 serve — listening on ${scheme}://localhost:${port}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
+    `aiocli serve — listening on ${scheme}://localhost:${port}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
       `Share this token with attach clients (never sent over the wire): ${token}\n` +
       `Type here to chat locally too. Ctrl+C to stop.\n\n`,
   );

@@ -10,24 +10,24 @@ and run shell commands in a scoped workspace.
 npm install
 cp .env.example .env   # fill in ANTHROPIC_API_KEY
 npm run build
-npm link                # puts the `ai3` binary on PATH globally
+npm link                # puts the `aiocli` binary on PATH globally
 ```
 
-The `.env` next to the package is loaded automatically on every `ai3` invocation
+The `.env` next to the package is loaded automatically on every `aiocli` invocation
 (regardless of the current directory), so `npm run code` from another repo still
 finds the key. Variables already exported in the environment take precedence.
 
 ## Commands
 
-- `ai3 chat` — interactive chat with tool-use (file read/write/edit, `run_bash`)
+- `aiocli chat` — interactive chat with tool-use (file read/write/edit, `run_bash`)
   scoped to `--workspace` (default: current directory).
-- `ai3 serve` — host a chat session and print a token + WebSocket address that a
+- `aiocli serve` — host a chat session and print a token + WebSocket address that a
   remote client can attach to. Tools always execute on the host, never on the
   attach client.
-- `ai3 attach ws://<host>:<port>` — join a running `serve` session from another
+- `aiocli attach ws://<host>:<port>` — join a running `serve` session from another
   machine, using the token it printed. You'll be prompted for the token; auth
   uses an HMAC challenge/response so the token itself never crosses the wire.
-- `ai3 sessions list` — list saved sessions (id, last updated, workspace).
+- `aiocli sessions list` — list saved sessions (id, last updated, workspace).
 
 ### Flags
 
@@ -35,7 +35,7 @@ finds the key. Variables already exported in the environment take precedence.
   File paths that resolve outside this directory are rejected.
 - `--resume <id>` / `--continue` — resume a specific saved session, or the most
   recently updated one. Full history (including tool calls) is persisted to
-  `~/.ai3/sessions/<id>.json` after every turn.
+  `~/.aiocli/sessions/<id>.json` after every turn.
 - `--yolo` — skip the y/n confirmation prompt before `write_file`, `edit_file`,
   or `run_bash`. Off by default: those three tools always ask first.
 - `--cert <path> --key <path>` (serve only) — serve over `wss://` (TLS) using a
@@ -71,17 +71,17 @@ also refuse `ws://` from an `https://` page.
 
 ## Remote-controlling another repo
 
-Any repo can expose its own `ai3 serve`, rooted at that repo, via an npm
+Any repo can expose its own `aiocli serve`, rooted at that repo, via an npm
 script, e.g.:
 
 ```json
-{ "scripts": { "code": "ai3 serve --port 4318" } }
+{ "scripts": { "code": "aiocli serve --port 4318" } }
 ```
 
-Then `npm run code` in that repo, and `ai3 attach ws://<host>:4318` from
+Then `npm run code` in that repo, and `aiocli attach ws://<host>:4318` from
 another machine to work on it remotely.
 
-## Running `ai3 serve` in production (exposed beyond localhost)
+## Running `aiocli serve` in production (exposed beyond localhost)
 
 `serve` is designed for one trusted operator driving one machine. Before
 exposing it past `localhost`, treat the following as required, not optional:
@@ -91,7 +91,7 @@ exposing it past `localhost`, treat the following as required, not optional:
    *does*. Run with `--cert/--key` (`wss://`), or terminate TLS in front of it
    (nginx/Caddy/Cloudflare Tunnel proxying to `ws://127.0.0.1:<port>`). The
    Tailscale + `tailscale cert` route is the least effort for a personal setup.
-2. **Set a long, fixed `AI3_REMOTE_TOKEN`** in the package `.env` (32+ random
+2. **Set a long, fixed `AIOCLI_REMOTE_TOKEN`** in the package `.env` (32+ random
    bytes, e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
    Without it a new random token is printed at every start, which is fine for
    an interactive terminal but useless for a service.
@@ -108,10 +108,10 @@ exposing it past `localhost`, treat the following as required, not optional:
 5. **Scope the workspace** with `-w` to the single repo the session should
    touch; `run_bash` still executes with the host user's full privileges inside
    that cwd, so run the service as a low-privilege user.
-6. **Keep it alive** with a supervisor, e.g. `pm2 start ai3 --name ai3-ai5 -- serve --port 4318 -w /srv/ai5`
+6. **Keep it alive** with a supervisor, e.g. `pm2 start aiocli --name aiocli-ai5 -- serve --port 4318 -w /srv/ai5`
    or a `systemd` unit with `Restart=on-failure`; stdin will be closed, so
    pair this with point 4.
-7. **Sessions are plaintext JSON** in `~/.ai3/sessions/` (full conversation,
+7. **Sessions are plaintext JSON** in `~/.aiocli/sessions/` (full conversation,
    tool inputs, file contents). Protect that directory's permissions and
    rotate/delete old sessions.
 

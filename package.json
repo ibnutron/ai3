@@ -4,7 +4,7 @@
   "description": "Terminal AI CLI with remote control support",
   "type": "module",
   "bin": {
-    "ai3": "./dist/cli.js"
+    "aiocli": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node22 --clean",

@@ -13,7 +13,7 @@ export interface SessionRecord {
   history: Anthropic.MessageParam[];
 }
 
-const SESSIONS_DIR = join(homedir(), '.ai3', 'sessions');
+const SESSIONS_DIR = join(homedir(), '.aiocli', 'sessions');
 
 function ensureDir(): void {
   mkdirSync(SESSIONS_DIR, { recursive: true });
