@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import Anthropic from '@anthropic-ai/sdk';
 import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
 import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
+import { readAuth, serverUrl } from './config.js';
 import type { HistoryItem } from './protocol.js';
 
 type MessageParam = Anthropic.MessageParam;
@@ -39,12 +40,7 @@ export class ChatSession extends EventEmitter {
 
   constructor(options: ChatSessionOptions) {
     super();
-    const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in.');
-    }
-
-    this.client = new Anthropic({ apiKey });
+    this.client = createAnthropicClient(options.apiKey);
     this.model = options.model;
     this.workspaceRoot = options.workspaceRoot;
     this.confirm = options.confirm;
@@ -163,4 +159,27 @@ export class ChatSession extends EventEmitter {
     };
     saveSession(record);
   }
+}
+
+/**
+ * Precedence: an explicit key or `ANTHROPIC_API_KEY` talks
+ * to Anthropic directly on the user's own account; otherwise the token from
+ * `aiolah auth login` goes through the aiolah proxy and is billed to the plan.
+ */
+function createAnthropicClient(explicitKey?: string): Anthropic {
+  const apiKey = explicitKey ?? process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
+    return new Anthropic({ apiKey });
+  }
+
+  const auth = readAuth();
+  if (auth) {
+    return new Anthropic({
+      apiKey: null,
+      authToken: auth.token,
+      baseURL: `${serverUrl(auth)}/api/cli/anthropic`,
+    });
+  }
+
+  throw new Error('Not logged in. Run `aiolah auth login` (or set ANTHROPIC_API_KEY to use your own key).');
 }
