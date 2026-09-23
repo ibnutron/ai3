@@ -1,17 +1,17 @@
 {
-  "name": "aiocli",
+  "name": "@aiolah/cli",
   "version": "0.1.0",
   "description": "Terminal AI CLI with remote control support",
   "type": "module",
   "bin": {
-    "aiocli": "./dist/cli.js"
+    "aiolah": "dist/cli.js"
   },
   "files": [
     "dist"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ibnutron/ai3.git"
+    "url": "git+https://github.com/ibnutron/aiocli.git"
   },
   "engines": {
     "node": ">=22"
@@ -24,7 +24,7 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.35.0",
     "commander": "^13.0.0",

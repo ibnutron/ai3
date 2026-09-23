@@ -13,7 +13,7 @@ loadPackageEnv();
 
 const program = new Command();
 
-program.name('aiocli').description('Terminal AI CLI with remote control support').version('0.1.0');
+program.name('aiolah').description('Terminal AI CLI with remote control support').version('0.1.0');
 
 program
   .command('chat')
@@ -27,7 +27,7 @@ program
 
 program
   .command('serve')
-  .description('Host the current chat session so a remote "aiocli attach" client can join')
+  .description('Host the current chat session so a remote "aiolah attach" client can join')
   .option('-p, --port <port>', 'port to listen on', '4317')
   .option('-m, --model <model>', 'Anthropic model id', 'claude-sonnet-5')
   .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
@@ -40,7 +40,7 @@ program
 
 program
   .command('attach <address>')
-  .description('Attach to a running "aiocli serve" session, e.g. aiocli attach ws://host:4317')
+  .description('Attach to a running "aiolah serve" session, e.g. aiolah attach ws://host:4317')
   .action(attachCommand);
 
 const sessions = program.command('sessions').description('Manage saved chat sessions');
@@ -50,7 +50,7 @@ program.parse();
 
 /**
  * Loads the `.env` that sits next to this package (not the caller's cwd, so
- * `aiocli serve` launched from another repo's npm script still finds the key).
+ * `aiolah serve` launched from another repo's npm script still finds the key).
  * Variables already present in the environment win over the file.
  */
 function loadPackageEnv(): void {
