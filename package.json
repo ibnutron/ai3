@@ -1,13 +1,24 @@
 {
-  "name": "ai3",
+  "name": "aiocli",
   "version": "0.1.0",
   "description": "Terminal AI CLI with remote control support",
   "type": "module",
   "bin": {
     "aiocli": "./dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ibnutron/ai3.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node22 --clean",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/cli.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
