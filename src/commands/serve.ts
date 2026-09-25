@@ -6,7 +6,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { hostname } from 'node:os';
 import { basename, resolve } from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
-import { ChatSession } from '../session.js';
+import { ChatSession, type PromptOrigin } from '../session.js';
 import { generateNonce, verifyChallenge } from '../auth.js';
 import { apiRequest, machineIdFor, readAuth, relayHostUrl, serverUrl, type StoredAuth } from '../config.js';
 import { findLatestSession } from '../persistence.js';
@@ -128,15 +128,15 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       }
       stdout.write(`\nremote> ${message.text}\n`);
       broadcast({ type: 'user', text: message.text }, peer);
-      await runTurn(message.text);
+      await runTurn(message.text, 'remote');
     }
   }
 
-  async function runTurn(text: string): Promise<void> {
+  async function runTurn(text: string, origin: PromptOrigin): Promise<void> {
     busy = true;
     broadcast({ type: 'busy' });
     try {
-      const { reply } = await session.send(text);
+      const { reply } = await session.send(text, origin);
       broadcast({ type: 'assistant', text: reply });
       stdout.write(`\nassistant> ${reply}\n\n`);
     } catch (error) {
@@ -163,6 +163,9 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
           peers,
           addPeer,
           handlePeerMessage,
+          onRegistered: (hostId) => {
+            session.hostId = hostId;
+          },
         })
       : startDirect(options, {
           addPeer,
@@ -198,7 +201,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       continue;
     }
     broadcast({ type: 'user', text: input });
-    await runTurn(input);
+    await runTurn(input, 'terminal');
   }
 }
 
@@ -296,6 +299,8 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
 
 interface RelayHooks {
   peers: Set<Peer>;
+  /** Called with the device id once aiolah has registered this machine. */
+  onRegistered(hostId: number): void;
   addPeer(peer: Peer): void;
   handlePeerMessage(peer: Peer, message: WireMessage): Promise<void>;
 }
@@ -330,6 +335,7 @@ async function startRelay(
     throw new Error(`Could not register this machine with ${server} (HTTP ${registration.status}).`);
   }
   const hostId = registration.data.host_id;
+  hooks.onRegistered(hostId);
 
   const relayPeers = new Map<string, Peer>();
   let backoff = 1000;

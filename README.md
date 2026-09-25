@@ -1,183 +1,223 @@
-# aiolah
+# aiolah CLI
 
-Terminal AI CLI with remote-control support: start a session on one machine and
-drive it from another (aiolah /code, the aiolah app, or VS Code). The model can read/write files
-and run shell commands in a scoped workspace.
+A terminal AI coding agent from [aiolah](https://aiolah.com). It reads and edits
+files and runs commands in your project, and you can drive the same session
+from your browser, phone or VS Code.
 
-## Install & sign in
+- **No API key needed.** Sign in with your aiolah account; usage is billed to your plan.
+- **Many models.** Every coding model enabled on aiolah that your plan allows — not only Claude.
+- **Remote control.** `aiolah rc` makes this folder controllable from [aiolah.com/code](https://aiolah.com/code) without opening ports.
+- **You stay in control.** File changes and shell commands ask for Allow/Deny unless you choose otherwise.
+
+Requires Node.js 22 or newer.
+
+## Install
 
 ```bash
-curl -fsSL https://aiolah.com/cli/install.sh | bash   # or: npm install -g @aiolah/cli
-aiolah auth login        # approve the code in your browser — no API key needed
-aiolah rc                # control this folder from aiolah /code, the app or VS Code
+npm install -g @aiolah/cli
+# or
+curl -fsSL https://aiolah.com/cli/install.sh | bash
 ```
 
-Which credentials are used for model calls:
+Check the installation any time with `aiolah doctor`.
 
-1. `ANTHROPIC_API_KEY` (env or the package `.env`) — if set, model calls go
-   straight to Anthropic on your own key.
-2. Otherwise the token from `aiolah auth login` (`~/.aiolah/auth.json`, mode
-   0600) — model calls go through `https://aiolah.com/api/cli/anthropic` and are
-   billed to your aiolah plan. Any coding model your plan allows can be used
-   (Claude, GPT, Gemini, Qwen, … whatever aiolah has enabled); `aiolah models`
-   lists them live and `--model <id>` picks one (default: your plan's default).
+## Quick start
 
-From source: `npm install && npm run build && npm link`. The `.env` next to the
-package is loaded automatically on every invocation (regardless of the current
-directory); variables already exported in the environment take precedence.
-
-## Commands
-
-- `aiolah auth login|logout|status` (shortcuts `aiolah login` / `aiolah logout`)
-  — device-code sign-in: approve a code in your browser, no password or key in
-  the terminal.
-  `--server <url>` (or `AIOLAH_SERVER`) targets another aiolah instance,
-  `--no-browser` only prints the URL.
-- `aiolah remote-control [name]` / `aiolah rc [name]` — registers this folder as a device and dials out to the aiolah
-  relay. No open port, certificate or token; the device appears on /code.
-- `aiolah models` — list the coding models your aiolah plan can use (live from
-  the server, so newly enabled models appear without updating the CLI).
-- `aiolah` / `aiolah chat` — interactive chat with tool-use (file read/write/edit,
-  `run_bash`) scoped to `--workspace` (default: current directory).
-- `aiolah run "<prompt>"` / `aiolah -p "<prompt>"` — non-interactive: one prompt
-  in, the final answer out (`--output-format text|json`). Piped stdin is appended
-  to the prompt (`cat log.txt | aiolah -p "explain this error"`). Nobody can
-  confirm here, so changes are denied unless the permission mode allows them.
-- `aiolah doctor` — check the install, credentials, server, login, models and
-  relay; exits 1 when a required check fails.
-- `aiolah upgrade [version]` (alias `update`) — update the npm install to the
-  latest or a given version; `--check` only reports.
-- `aiolah serve` — same as `rc` when logged in and no `--port` is given. With
-  `--port` it runs in **direct mode**: listens for WebSocket clients that
-  authenticate with `AIOLAH_REMOTE_TOKEN` (LAN / self-hosted / no account).
-  Tools always execute on the host, never on the client.
-- `aiolah attach ws://<host>:<port>` — join a direct-mode `serve` session from
-  another machine, using its token (HMAC challenge/response, the token never
-  crosses the wire).
-- `aiolah sessions list` — list saved sessions (id, last updated, workspace).
-- `aiolah relay` — operators only: the relay server behind
-  `wss://aiolah.com/cli-relay/` (see "Relay" below).
-
-### Flags
-
-- `-w, --workspace <dir>` — root directory tools are scoped to (default `.`).
-  File paths that resolve outside this directory are rejected.
-- `-m, --model <id>` — model to use (see `aiolah models`).
-- `-r, --resume <id>` / `-c, --continue` — resume a specific saved session, or the
-  most recently updated one. Full history (including tool calls) is persisted to
-  `~/.aiolah/sessions/<id>.json` after every turn.
-- `--permission-mode <mode>` — when to ask before mutating tools:
-  `default` (ask before `write_file`, `edit_file`, `run_bash`), `acceptEdits`
-  (file edits allowed, shell commands still ask), `bypassPermissions` (never
-  ask). `--dangerously-skip-permissions` is the same as `bypassPermissions`
-  (the old `--yolo` still works as a hidden alias).
-- `-n, --name <name>` (serve/rc) — device name on /code (default
-  `<hostname> · <folder>`).
-- `--cert <path> --key <path>` (direct-mode serve only) — serve over `wss://` (TLS) using a
-  self-signed cert or one from Tailscale/Let's Encrypt, for confidentiality
-  when attaching over a real network instead of localhost.
-
-## Relay (how `aiolah rc` works)
-
-```
-aiolah rc ──outbound wss──▶ aiolah relay ◀──wss + one-time ticket── /code, ai6, ai4
-     │                          │
-     └─ POST /api/v1/app/cli/hosts (register device)
-                                └─ POST /api/cli/relay/host-online|host-offline (verify CLI token)
+```bash
+aiolah auth login     # approve the code in your browser
+cd my-project
+aiolah                # interactive chat in this folder
 ```
 
-- The host connects to `/host` with `Authorization: Bearer <cli token>` and
-  `X-Host-Id`; the relay verifies both against Laravel with the shared
-  `CLI_RELAY_SECRET` header.
-- Clients get a 60-second single-use ticket from Laravel
-  (`POST /code/hosts/{id}/ticket` or `/api/v1/app/remote-hosts/{id}/ticket`)
-  and connect to `/client?ticket=…`; the relay checks the HMAC locally.
-- Clients speak the normal wire protocol below, minus the challenge: the host
-  sends `authed` as soon as the relay pairs them. Between host and relay the
-  messages are wrapped as `relay_client_joined` / `relay_client_left` /
-  `relay_msg {from|to, msg}`. The relay keeps no conversation state.
-- Run it with `CLI_RELAY_SECRET=… aiolah relay --port 4320 --api https://aiolah.com`
-  (binds 127.0.0.1) behind nginx `location /cli-relay/ { proxy_pass http://127.0.0.1:4320/; … Upgrade headers … }`.
+`aiolah auth login` prints a code and opens the approval page; after you click
+Approve the terminal signs in by itself. `aiolah auth status` shows who is
+signed in, `aiolah auth logout` signs out and revokes this machine's token.
 
-## Wire protocol (for building other clients)
+## Usage
 
-`serve` speaks newline-free JSON messages over a single WebSocket. Any client
-(web page, mobile app, editor extension) can implement it:
+### In the terminal
 
-1. Server → `{type:"challenge", nonce}`; client → `{type:"auth", hmac}` where
-   `hmac = hex(HMAC-SHA256(key = token, message = nonce))`. Wrong answer →
-   `{type:"error", text:"unauthorized"}` and the socket closes (3 attempts per
-   socket, 5 per IP per minute).
-2. Server → `{type:"authed", sessionId, workspace, model, history}` where
-   `history` is the conversation so far, flattened for rendering:
-   `{role:"user"|"assistant", text}` and `{role:"tool", name, input, result}`.
-3. Client → `{type:"user", text}` starts a turn. While it runs the server sends
-   `{type:"busy"}`, then per tool call `{type:"tool", name, input}` and
-   `{type:"tool_result", name, result}`, then `{type:"assistant", text}` and
-   `{type:"idle"}`. A `user` message sent while busy gets `error: "busy"`.
-   Other connected clients receive the same `user` message so they stay in sync.
-4. Unless the host runs with `--dangerously-skip-permissions` (or a permission
-   mode that allows them), mutating tools (`write_file`,
-   `edit_file`, `run_bash`) pause with `{type:"confirm", id, description}` sent
-   to every client and printed on the host terminal. The first answer wins —
-   a client replies `{type:"confirm_reply", id, allow:true|false}`, or the host
-   operator types `y`/`n`. No answer within 5 minutes counts as denied.
-
-The token never crosses the wire, but everything else does: use `wss://` (see
-production notes below) whenever the connection leaves localhost. Browsers
-also refuse `ws://` from an `https://` page.
-
-## Remote-controlling another repo
-
-Any repo can expose its own `aiolah serve`, rooted at that repo, via an npm
-script, e.g.:
-
-```json
-{ "scripts": { "code": "aiolah serve --port 4318" } }
+```bash
+aiolah                  # interactive chat (same as: aiolah chat)
+aiolah -c               # continue the last session
+aiolah -r <session-id>  # resume a specific session (see: aiolah sessions list)
 ```
 
-Then `npm run code` in that repo, and `aiolah attach ws://<host>:4318` from
-another machine to work on it remotely.
+The agent can only touch files inside the workspace folder (`-w`, default: the
+current folder).
 
-## Running direct-mode `aiolah serve --port` in production (exposed beyond localhost)
+### In scripts and CI
 
-`serve` is designed for one trusted operator driving one machine. Before
-exposing it past `localhost`, treat the following as required, not optional:
+One prompt in, the final answer out. Piped input is appended to the prompt.
 
-1. **Always use TLS.** Auth is HMAC challenge/response (the token never crosses
-   the wire), but every prompt, tool call, file content, and command output
-   *does*. Run with `--cert/--key` (`wss://`), or terminate TLS in front of it
-   (nginx/Caddy/Cloudflare Tunnel proxying to `ws://127.0.0.1:<port>`). The
-   Tailscale + `tailscale cert` route is the least effort for a personal setup.
-2. **Set a long, fixed `AIOLAH_REMOTE_TOKEN`** in the package `.env` (32+ random
-   bytes, e.g. `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
-   Without it a new random token is printed at every start, which is fine for
-   an interactive terminal but useless for a service.
-3. **Bind narrowly / firewall the port.** `serve` listens on all interfaces.
-   Don't open the port on a public IP; put it behind a VPN (Tailscale/WireGuard),
-   an SSH tunnel (`ssh -L 4317:localhost:4317 host`), or a reverse proxy with
-   its own auth.
-4. **Never run with `--dangerously-skip-permissions` on a machine you care about.** Without it, every
-   `write_file` / `edit_file` / `run_bash` waits for a y/N on the *host*
-   terminal — which means an unattended service (stdin closed) will hang on
-   the first mutating tool call. For an unattended host, either accept
-   `--dangerously-skip-permissions` inside a sandboxed workspace/VM, or keep a terminal attached
-   (tmux/screen) to approve calls.
-5. **Scope the workspace** with `-w` to the single repo the session should
-   touch; `run_bash` still executes with the host user's full privileges inside
-   that cwd, so run the service as a low-privilege user.
-6. **Keep it alive** with a supervisor, e.g. `pm2 start aiolah --name aiolah-ai5 -- serve --port 4318 -w /srv/ai5`
-   or a `systemd` unit with `Restart=on-failure`; stdin will be closed, so
-   pair this with point 4.
-7. **Sessions are plaintext JSON** in `~/.aiolah/sessions/` (full conversation,
-   tool inputs, file contents). Protect that directory's permissions and
-   rotate/delete old sessions.
+```bash
+aiolah -p "summarize what this project does"
+cat error.log | aiolah -p "explain this error"
+aiolah -p "list the TODOs" --output-format json   # {"session_id", "model", "result"}
+```
 
-Not yet live-tested: `wss://` against a real certificate, and `attach` across
-the public internet (only localhost so far).
+`aiolah -p` is the same as `aiolah run`. Nobody can answer an Allow/Deny prompt
+here, so anything the permission mode doesn't allow is denied.
 
-## Status
+### Remote control
 
-Chat, tool-use, session persistence, and remote attach/serve work over a
-single shared conversation (verified end-to-end with real API calls); no
-multi-session concurrency within one process.
+```bash
+aiolah rc "My laptop"   # same as: aiolah remote-control "My laptop"
+```
+
+The machine appears as a device on [aiolah.com/code](https://aiolah.com/code)
+(and in the aiolah app and VS Code extension). It connects out to aiolah — no
+open ports, certificates or tokens. Actions that change files or run commands
+show an Allow/Deny prompt there.
+
+## Models
+
+```bash
+aiolah models           # coding models your plan can use, default marked
+aiolah --model <id>     # use one
+```
+
+The list is read live from aiolah, so models enabled later (or a plan upgrade)
+show up without updating the CLI. Without `--model`, your plan's default model
+is used.
+
+## Permissions
+
+Choose how much the agent may do without asking with `--permission-mode`
+(chat, run, rc and serve):
+
+| Mode | Behaviour |
+|---|---|
+| `default` | Asks before every file change (`write_file`, `edit_file`) and every shell command (`run_bash`). |
+| `acceptEdits` | File changes are allowed; shell commands still ask. |
+| `bypassPermissions` | Never asks. Same as `--dangerously-skip-permissions` — only for sandboxes or throwaway machines. |
+
+## Command reference
+
+Every command accepts `-h, --help`; `aiolah -v` prints the version.
+
+| Command | Description |
+|---|---|
+| `aiolah auth login` | Sign in through your browser (`--server <url>`, `--no-browser`). Shortcut: `aiolah login`. |
+| `aiolah auth status` | Show the signed-in account and which credentials model calls use. Alias: `auth list`. |
+| `aiolah auth logout` | Sign out and revoke this machine's token. Shortcut: `aiolah logout`. |
+| `aiolah models` | List the coding models your plan can use. |
+| `aiolah [chat]` | Interactive agent in the terminal. |
+| `aiolah run [prompt...]` / `aiolah -p "<prompt>"` | Non-interactive: answer one prompt and exit (`--output-format text\|json`). |
+| `aiolah remote-control [name]` / `aiolah rc [name]` | Control this folder from aiolah (`-n, --name <name>`). |
+| `aiolah serve` | Same as `rc` when signed in; with `--port` it runs in direct mode (see below). |
+| `aiolah attach <address>` | Join a direct-mode `serve` session from another machine. |
+| `aiolah sessions list` | List saved sessions. |
+| `aiolah doctor` | Check installation, login, server, models and relay. Exits 1 on failure. |
+| `aiolah upgrade [version]` | Update from npm (`--check` only reports). Alias: `update`. |
+
+Session flags (chat, run, rc, serve):
+
+| Flag | Description |
+|---|---|
+| `-m, --model <id>` | Model to use (see `aiolah models`). |
+| `-w, --workspace <dir>` | Folder the agent may read and change (default: current folder). |
+| `-c, --continue` | Continue the most recently used session. |
+| `-r, --resume <id>` | Resume a saved session by id. |
+| `--permission-mode <mode>` | `default`, `acceptEdits` or `bypassPermissions`. |
+| `--dangerously-skip-permissions` | Never ask. Only use it in a sandbox. |
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Call Anthropic directly with your own key instead of your aiolah plan (default model `claude-sonnet-5`). |
+| `AIOLAH_SERVER` | aiolah server URL (default `https://aiolah.com`). Overrides the server saved at login. |
+| `AIOLAH_RELAY_URL` | Relay URL for remote control (default `<server>/cli-relay`). |
+| `AIOLAH_REMOTE_TOKEN` | Shared secret for direct mode (`serve --port` and `attach`). |
+
+Exported variables win over a `.env` file next to the installed package.
+Empty values count as unset.
+
+## Privacy & data
+
+- **Prompts sent through aiolah are logged to your account.** When you use the
+  CLI with your aiolah login, every new prompt you send — typed in the
+  terminal, sent from `/code` / the app / VS Code, or passed to `aiolah -p` — is
+  recorded together with the model, device, session id and CLI version. Tool
+  results and file contents in follow-up steps are sent to the model but not
+  logged as prompts.
+- **Your own key bypasses aiolah.** With `ANTHROPIC_API_KEY` set, model calls go
+  straight to Anthropic and aiolah does not see or log them.
+- **Local history.** Full sessions (conversation, tool calls, file contents) are
+  saved as plain JSON in `~/.aiolah/sessions/` on the machine running the agent.
+  Your login token is in `~/.aiolah/auth.json` (mode 0600).
+- **The relay keeps nothing.** Remote-control messages pass through the aiolah
+  relay without being stored.
+
+## Troubleshooting
+
+- `aiolah doctor` checks everything and tells you what to fix.
+- **"Your plan quota is used up"** — the plan limit was reached; wait for the
+  reset or upgrade your plan.
+- **429 / "Provider returned error" on a free model** — free models are often
+  busy; try again or pick another model from `aiolah models`.
+- **"Not logged in"** — run `aiolah auth login`, or set `ANTHROPIC_API_KEY`.
+
+## Advanced
+
+### Direct mode (LAN / self-hosted, no aiolah account)
+
+```bash
+AIOLAH_REMOTE_TOKEN=<long-random-secret> aiolah serve --port 4317
+aiolah attach ws://<host>:4317          # from another machine
+```
+
+Clients answer an HMAC challenge with the token (it never crosses the wire).
+The page at aiolah.com/code can also connect ("Add direct device"), but an
+`https://` page only accepts `wss://` — serve with `--cert <path> --key <path>`
+or put a TLS proxy in front. Before exposing direct mode beyond localhost:
+
+1. Always use TLS — prompts, file contents and command output cross the wire.
+2. Set a long, fixed `AIOLAH_REMOTE_TOKEN` (32+ random bytes).
+3. Don't open the port publicly; use a VPN, an SSH tunnel or a reverse proxy.
+4. Keep the default permission mode on machines you care about; an unattended
+   host (closed stdin) gets approvals from connected clients, and unanswered
+   prompts are denied after 5 minutes.
+5. Scope the workspace with `-w` and run as a low-privilege user.
+
+### Running the relay (aiolah operators)
+
+`aiolah relay --port 4320 --api https://aiolah.com` with `CLI_RELAY_SECRET`
+set (must match the aiolah app). It binds 127.0.0.1; put it behind a TLS
+reverse proxy at `/cli-relay/`. Hosts connect to `/host` with their CLI token
+and device id (verified against aiolah); clients connect to
+`/client?ticket=…` with a 60-second single-use ticket issued by aiolah and
+checked locally. The relay only forwards frames and stores nothing.
+
+### Wire protocol (for building clients)
+
+JSON messages over one WebSocket:
+
+1. Direct mode only: server → `{type:"challenge", nonce}`; client →
+   `{type:"auth", hmac}` with `hmac = hex(HMAC-SHA256(key = token, message = nonce))`.
+   Wrong answer → `{type:"error", text:"unauthorized"}` and the socket closes.
+   Relay clients skip this step (the ticket authenticates them).
+2. Server → `{type:"authed", sessionId, workspace, model, history}`, where
+   `history` holds `{role:"user"|"assistant", text}` and
+   `{role:"tool", name, input, result}` items.
+3. Client → `{type:"user", text}` starts a turn. The server sends
+   `{type:"busy"}`, then `{type:"tool", name, input}` /
+   `{type:"tool_result", name, result}` per tool call, then
+   `{type:"assistant", text}` and `{type:"idle"}`. Other connected clients
+   receive the same `user` message.
+4. When a tool needs approval: `{type:"confirm", id, description}` to every
+   client; the first `{type:"confirm_reply", id, allow}` (or `y`/`n` on the host
+   terminal) wins. No answer within 5 minutes counts as denied.
+
+## Development
+
+```bash
+git clone https://github.com/ibnutron/aiocli && cd aiocli
+npm install && npm run build && npm link
+npm run typecheck
+```
+
+## License
+
+MIT

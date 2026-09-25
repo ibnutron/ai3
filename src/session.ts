@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
 import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
 import { readAuth, serverUrl } from './config.js';
+import { packageVersion } from './version.js';
 import type { HistoryItem } from './protocol.js';
 
 type MessageParam = Anthropic.MessageParam;
@@ -10,6 +11,13 @@ type MessageParam = Anthropic.MessageParam;
 export interface ChatTurnResult {
   reply: string;
 }
+
+/**
+ * Where a prompt came from, sent to aiolah (which logs every prompt it
+ * processes): typed on the host, sent from /code / the app / VS Code, or
+ * `aiolah run`.
+ */
+export type PromptOrigin = 'terminal' | 'remote' | 'script';
 
 export interface ChatSessionOptions {
   model: string;
@@ -31,6 +39,10 @@ export interface ChatSessionOptions {
  */
 export class ChatSession extends EventEmitter {
   private readonly client: Anthropic;
+  /** True when model calls go through the aiolah proxy (login), not a personal key. */
+  private readonly viaAiolah: boolean;
+  /** Device id on aiolah once `serve`/`rc` has registered it; sent with each prompt. */
+  hostId?: number;
   private readonly model: string;
   private readonly workspaceRoot: string;
   private readonly confirm: ConfirmFn;
@@ -40,7 +52,7 @@ export class ChatSession extends EventEmitter {
 
   constructor(options: ChatSessionOptions) {
     super();
-    this.client = createAnthropicClient(options.apiKey);
+    ({ client: this.client, viaAiolah: this.viaAiolah } = createAnthropicClient(options.apiKey));
     this.model = options.model;
     this.workspaceRoot = options.workspaceRoot;
     this.confirm = options.confirm;
@@ -102,16 +114,29 @@ export class ChatSession extends EventEmitter {
     return items;
   }
 
-  async send(userMessage: string): Promise<ChatTurnResult> {
+  async send(userMessage: string, origin: PromptOrigin = 'terminal'): Promise<ChatTurnResult> {
     this.history.push({ role: 'user', content: userMessage });
 
+    // Context for aiolah's prompt log; never sent to Anthropic directly.
+    const headers = this.viaAiolah
+      ? {
+          'X-Aiolah-Session': this.id,
+          'X-Aiolah-Origin': origin,
+          'X-Aiolah-Version': packageVersion(),
+          ...(this.hostId ? { 'X-Aiolah-Host': String(this.hostId) } : {}),
+        }
+      : undefined;
+
     while (true) {
-      const response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 4096,
-        tools: TOOL_SCHEMAS,
-        messages: this.history,
-      });
+      const response = await this.client.messages.create(
+        {
+          model: this.model,
+          max_tokens: 4096,
+          tools: TOOL_SCHEMAS,
+          messages: this.history,
+        },
+        { headers },
+      );
 
       this.history.push({ role: 'assistant', content: response.content });
       this.persist();
@@ -166,19 +191,22 @@ export class ChatSession extends EventEmitter {
  * to Anthropic directly on the user's own account; otherwise the token from
  * `aiolah auth login` goes through the aiolah proxy and is billed to the plan.
  */
-function createAnthropicClient(explicitKey?: string): Anthropic {
-  const apiKey = explicitKey ?? process.env.ANTHROPIC_API_KEY;
+function createAnthropicClient(explicitKey?: string): { client: Anthropic; viaAiolah: boolean } {
+  const apiKey = explicitKey || process.env.ANTHROPIC_API_KEY;
   if (apiKey) {
-    return new Anthropic({ apiKey });
+    return { client: new Anthropic({ apiKey }), viaAiolah: false };
   }
 
   const auth = readAuth();
   if (auth) {
-    return new Anthropic({
-      apiKey: null,
-      authToken: auth.token,
-      baseURL: `${serverUrl(auth)}/api/cli/anthropic`,
-    });
+    return {
+      client: new Anthropic({
+        apiKey: null,
+        authToken: auth.token,
+        baseURL: `${serverUrl(auth)}/api/cli/anthropic`,
+      }),
+      viaAiolah: true,
+    };
   }
 
   throw new Error('Not logged in. Run `aiolah auth login` (or set ANTHROPIC_API_KEY to use your own key).');

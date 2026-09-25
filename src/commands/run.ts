@@ -57,7 +57,7 @@ export async function runCommand(promptParts: string[], options: RunOptions): Pr
     stderr.write(`[tool] ${name} ${JSON.stringify(input)}\n`);
   });
 
-  const { reply } = await session.send(prompt);
+  const { reply } = await session.send(prompt, 'script');
 
   if (options.outputFormat === 'json') {
     stdout.write(`${JSON.stringify({ session_id: session.sessionId, model: session.modelId, result: reply })}\n`);

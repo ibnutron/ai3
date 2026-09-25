@@ -1,7 +1,20 @@
 {
   "name": "@aiolah/cli",
   "version": "0.1.1",
-  "description": "Terminal AI CLI with remote control support",
+  "description": "Terminal AI coding agent from aiolah: edits files and runs commands in your project, with remote control from the browser, phone or VS Code",
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-agent",
+    "agent",
+    "aiolah",
+    "remote-control",
+    "llm"
+  ],
+  "homepage": "https://aiolah.com/docs?tab=cli",
+  "bugs": {
+    "url": "https://github.com/ibnutron/aiocli/issues"
+  },
   "type": "module",
   "bin": {
     "aiolah": "dist/cli.js"
