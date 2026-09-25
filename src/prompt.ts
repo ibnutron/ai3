@@ -67,11 +67,18 @@ export async function askSecret(rl: Interface, prompt: string): Promise<string |
   }
 }
 
-/** Numbered picker on a readline; returns the chosen index or null (empty/invalid answer). */
-export async function pick(rl: Interface, title: string, options: string[]): Promise<number | null> {
+/**
+ * Numbered picker on a readline; returns the chosen index or null (empty/invalid
+ * answer). With `ids`, typing one of them (e.g. a provider id) also selects it.
+ */
+export async function pick(rl: Interface, title: string, options: string[], ids?: string[]): Promise<number | null> {
   process.stdout.write(`\n${title}\n`);
   options.forEach((option, index) => process.stdout.write(`  ${String(index + 1).padStart(2)}. ${option}\n`));
-  const answer = await ask(rl, 'Number (Enter to cancel): ');
-  const index = Number(answer?.trim()) - 1;
+  const answer = (await ask(rl, ids ? 'Number or id (Enter to cancel): ' : 'Number (Enter to cancel): '))?.trim() ?? '';
+  const byId = ids ? ids.indexOf(answer.toLowerCase()) : -1;
+  if (byId !== -1) {
+    return byId;
+  }
+  const index = Number(answer) - 1;
   return Number.isInteger(index) && index >= 0 && index < options.length ? index : null;
 }

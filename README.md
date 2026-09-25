@@ -76,6 +76,10 @@ Completed), and you can filter, rename and archive them. **New session**
 starts another conversation on an online device; one `aiolah rc` can run
 several sessions at once. Sessions stay readable when the device is offline.
 
+From the Code page (and the app / VS Code) you can also attach images to a
+prompt, switch the session's model to any the device's provider offers, speak
+a prompt, and stop a running turn — including a shell command in progress.
+
 ## Models
 
 ```bash
@@ -100,19 +104,68 @@ aiolah -P openrouter -m <model-id>
 aiolah disconnect openrouter
 ```
 
-| Provider | id | Key from |
+| Provider | id | Key |
 |---|---|---|
 | aiolah (your plan) | `aiolah` | `aiolah auth login` |
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai` | `OPENAI_API_KEY` |
+| Google Gemini | `google` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |
 | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
-| Google Gemini | `google` | `GEMINI_API_KEY` |
+| OpenCode Zen | `opencode` | `OPENCODE_API_KEY` |
 | xAI | `xai` | `XAI_API_KEY` |
 | DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+| 302.AI | `302ai` | `302AI_API_KEY` |
+| Azure OpenAI | `azure` | `AZURE_API_KEY` / `AZURE_OPENAI_API_KEY` (+ `AZURE_RESOURCE_NAME`) |
+| Amazon Bedrock (API key) | `bedrock` | `AWS_BEARER_TOKEN_BEDROCK` |
+| Baseten | `baseten` | `BASETEN_API_KEY` |
+| Cerebras | `cerebras` | `CEREBRAS_API_KEY` |
+| Cloudflare Workers AI | `cloudflare-workers-ai` | `CLOUDFLARE_API_KEY` / `CLOUDFLARE_API_TOKEN` (+ `CLOUDFLARE_ACCOUNT_ID`) |
+| Cortecs | `cortecs` | `CORTECS_API_KEY` |
+| Deep Infra | `deepinfra` | `DEEPINFRA_API_KEY` |
+| DigitalOcean | `digitalocean` | `DIGITALOCEAN_ACCESS_TOKEN` |
+| Eden AI | `edenai` | `EDENAI_API_KEY` |
+| Fireworks AI | `fireworks` | `FIREWORKS_API_KEY` |
+| FrogBot | `frogbot` | `FROGBOT_API_KEY` |
+| GMI Cloud | `gmicloud` | `GMICLOUD_API_KEY` |
 | Groq | `groq` | `GROQ_API_KEY` |
+| Helicone | `helicone` | `HELICONE_API_KEY` |
+| Hugging Face | `huggingface` | `HF_TOKEN` |
+| IO.NET | `ionet` | `IOINTELLIGENCE_API_KEY` |
+| LLM Gateway | `llmgateway` | `LLMGATEWAY_API_KEY` |
+| MiniMax | `minimax` | `MINIMAX_API_KEY` |
 | Mistral | `mistral` | `MISTRAL_API_KEY` |
+| Modal | `modal` | `MODAL_PROXY_TOKEN` |
+| Moonshot AI (Kimi) | `moonshot` | `MOONSHOT_API_KEY` |
+| Nebius Token Factory | `nebius` | `NEBIUS_API_KEY` |
+| NVIDIA | `nvidia` | `NVIDIA_API_KEY` |
+| Ollama Cloud | `ollama-cloud` | `OLLAMA_API_KEY` |
+| OVHcloud AI Endpoints | `ovhcloud` | `OVHCLOUD_API_KEY` |
+| Poolside | `poolside` | `POOLSIDE_API_KEY` |
+| Scaleway | `scaleway` | `SCALEWAY_API_KEY` |
+| Snowflake Cortex | `snowflake-cortex` | `SNOWFLAKE_CORTEX_PAT` / `SNOWFLAKE_CORTEX_TOKEN` (+ `SNOWFLAKE_ACCOUNT`) |
+| STACKIT | `stackit` | `STACKIT_API_KEY` |
+| Together AI | `together` | `TOGETHER_API_KEY` |
+| Venice AI | `venice` | `VENICE_API_KEY` |
+| Vercel AI Gateway | `vercel` | `AI_GATEWAY_API_KEY` |
+| Z.AI | `zai` | `ZHIPU_API_KEY` / `ZAI_API_KEY` |
+| Z.AI Coding Plan | `zai-coding-plan` | `ZHIPU_API_KEY` / `ZAI_API_KEY` |
+| ZenMux | `zenmux` | `ZENMUX_API_KEY` |
+| Alibaba Cloud Model Studio (Qwen) | `dashscope` | `DASHSCOPE_API_KEY` |
+| Agnes AI | `agnes` | `AGNES_API_KEY` |
+| Featherless | `featherless` | `FEATHERLESS_API_KEY` |
 | Ollama (local) | `ollama` | no key, `http://localhost:11434/v1` |
-| Any OpenAI-compatible URL | `custom` | base URL + optional key |
+| LM Studio (local) | `lmstudio` | no key, `http://127.0.0.1:1234/v1` |
+| llama.cpp server (local) | `llama.cpp` | no key, `http://127.0.0.1:8080/v1` |
+| Atomic Chat (local) | `atomic-chat` | no key, `http://127.0.0.1:1337/v1` |
+| Other (any OpenAI-compatible URL) | `custom` | base URL + optional key |
+
+Local servers and the region/account-specific ones (Amazon Bedrock, Azure,
+Cloudflare, Snowflake, NVIDIA on-prem, Alibaba) ask for their URL or account
+name on connect. Not supported: sign-in with a Claude, ChatGPT or SuperGrok
+subscription (use an API key), and providers that need cloud credentials or
+OAuth (Google Vertex AI, Bedrock IAM keys, GitHub Copilot, GitLab Duo,
+SAP AI Core, Cloudflare AI Gateway). OpenCode Zen's free models only work
+inside OpenCode; its paid models work here.
 
 Keys are saved in `~/.aiolah/providers.json` (readable only by you) and never
 sent to aiolah; calls go straight from your machine to the provider, billed to
@@ -164,6 +217,7 @@ Every command accepts `-h, --help`; `aiolah -v` prints the version.
 | `aiolah sessions list` | List saved sessions. |
 | `aiolah doctor` | Check installation, login, server, models and relay. Exits 1 on failure. |
 | `aiolah upgrade [version]` | Update from npm (`--check` only reports). Alias: `update`. |
+| `aiolah uninstall` | Sign out, delete `~/.aiolah` and remove the npm package (`--keep-config`, `--keep-data`, `--dry-run`, `-f`). |
 
 Session flags (chat, run, rc, serve):
 
@@ -182,7 +236,8 @@ Session flags (chat, run, rc, serve):
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Call Anthropic directly with your own key instead of your aiolah plan (default model `claude-sonnet-5`). |
-| `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY` | Keys for those providers when none is saved with `aiolah connect`. |
+| Provider keys (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, `GEMINI_API_KEY`, `ZHIPU_API_KEY`, … — see the table under Providers) | Used for that provider when no key is saved with `aiolah connect`. |
+| `AZURE_RESOURCE_NAME`, `CLOUDFLARE_ACCOUNT_ID`, `SNOWFLAKE_ACCOUNT` | Fill in the provider's URL when you do not type it on connect. |
 | `AIOLAH_SERVER` | aiolah server URL (default `https://aiolah.com`). Overrides the server saved at login. |
 | `AIOLAH_RELAY_URL` | Relay URL for remote control (default `<server>/cli-relay`). |
 | `AIOLAH_REMOTE_TOKEN` | Shared secret for direct mode (`serve --port` and `attach`). |
@@ -212,6 +267,20 @@ Empty values count as unset.
   Your login token is in `~/.aiolah/auth.json` (mode 0600).
 - **The relay keeps nothing.** Remote-control messages pass through the aiolah
   relay without being stored (the session sync above is a separate HTTPS call).
+
+## Uninstall
+
+```bash
+aiolah uninstall --dry-run   # show what would be removed
+aiolah uninstall             # sign out, delete ~/.aiolah, npm uninstall -g @aiolah/cli
+```
+
+It revokes this machine's login token on aiolah, deletes your login, provider
+keys and device id (`--keep-config` keeps them) and saved sessions
+(`--keep-data` keeps them), then removes the package. `-f` skips the
+confirmation. Devices registered with `aiolah rc` stay on the Code page until
+you remove them there. Installed another way? `npm uninstall -g @aiolah/cli`
+and `rm -rf ~/.aiolah` do the same by hand.
 
 ## Troubleshooting
 

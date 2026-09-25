@@ -5,6 +5,8 @@ import { ask, askSecret, pick } from '../prompt.js';
 import {
   PROVIDERS,
   isConnected,
+  providerCredentials,
+  urlPlaceholders,
   listProviderModels,
   providerDef,
   removeProvider,
@@ -17,7 +19,7 @@ import { loginCommand } from './login.js';
 const MAX_MODELS_SHOWN = 40;
 
 /**
- * Connect a provider (like opencode's /connect): the aiolah account (device
+ * Connect a provider: the aiolah account (device
  * sign-in) or your own key for Anthropic / an OpenAI-compatible API. Checks
  * the key by listing the provider's models, then lets you pick one as the
  * active model. Shared by `aiolah connect` and `/connect` in chat.
@@ -33,6 +35,7 @@ export async function connectFlow(
       rl,
       'Connect a provider:',
       PROVIDERS.map((provider) => `${isConnected(provider.id) ? '✓' : ' '} ${provider.name}  [${provider.id}]`),
+      PROVIDERS.map((provider) => provider.id),
     );
     if (choice === null) return null;
     id = PROVIDERS[choice]!.id;
@@ -44,9 +47,21 @@ export async function connectFlow(
       await loginCommand({});
     }
   } else {
-    if (id === 'custom' || id === 'ollama') {
-      const current = def.baseURL ?? '';
-      const url = (await ask(rl, `Base URL (OpenAI-compatible)${current ? ` [${current}]` : ''}: `))?.trim() || current;
+    if (def.note) stdout.write(`${def.note}\n`);
+    const placeholders = def.baseURL ? urlPlaceholders(def.baseURL) : [];
+    if (placeholders.length) {
+      let url = def.baseURL as string;
+      for (const name of placeholders) {
+        const current = process.env[name] ?? '';
+        const value = (await ask(rl, `${name}${current ? ` [${current}]` : ''}: `))?.trim() || current;
+        if (!value) return null;
+        url = url.replace(`{${name}}`, value);
+      }
+      saveProvider(id, { baseURL: url });
+    } else if (id === 'custom' || def.askBaseUrl) {
+      const current = providerCredentials(id).baseURL ?? def.baseURL ?? '';
+      const label = def.kind === 'anthropic' ? 'Base URL (Anthropic-compatible)' : 'Base URL (OpenAI-compatible)';
+      const url = (await ask(rl, `${label}${current ? ` [${current}]` : ''}: `))?.trim() || current;
       if (!url) return null;
       saveProvider(id, { baseURL: url });
     }

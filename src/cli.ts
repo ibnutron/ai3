@@ -12,6 +12,7 @@ import { loginCommand, logoutCommand, statusCommand } from './commands/login.js'
 import { relayCommand } from './commands/relay.js';
 import { modelsCommand } from './commands/models.js';
 import { connectCommand, disconnectCommand } from './commands/connect.js';
+import { uninstallCommand } from './commands/uninstall.js';
 import { runCommand } from './commands/run.js';
 import { upgradeCommand } from './commands/upgrade.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -19,6 +20,14 @@ import { packageVersion } from './version.js';
 import { addPermissionOptions } from './permissions.js';
 
 loadPackageEnv();
+
+// Output piped into `head` & co.: exit quietly once the reader goes away.
+process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EPIPE') {
+    process.exit(0);
+  }
+  throw error;
+});
 
 const program = new Command();
 
@@ -147,6 +156,15 @@ program
   .argument('[version]', 'version to install (default: latest)')
   .option('--check', 'only check whether an update is available')
   .action(upgradeCommand);
+
+program
+  .command('uninstall')
+  .description('Sign out, delete ~/.aiolah and remove the npm package')
+  .option('--keep-config', 'keep login, provider keys and device id (~/.aiolah/*.json, machine-id)')
+  .option('--keep-data', 'keep saved sessions (~/.aiolah/sessions)')
+  .option('--dry-run', 'only show what would be removed')
+  .option('-f, --force', 'do not ask for confirmation')
+  .action(uninstallCommand);
 
 program.command('doctor').description('Check installation, login and connectivity to aiolah').action(doctorCommand);
 

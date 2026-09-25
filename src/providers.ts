@@ -7,7 +7,7 @@ import { fetchModels } from './models.js';
 /**
  * How the CLI talks to a provider:
  * - `aiolah`: your aiolah account (`aiolah auth login`), billed to your plan;
- * - `anthropic`: Anthropic Messages API with your own key;
+ * - `anthropic`: Anthropic Messages API (Anthropic itself, or a compatible endpoint);
  * - `openai`: any OpenAI-compatible Chat Completions API with your own key
  *   (translated to/from the CLI's internal Anthropic format, tools included).
  */
@@ -17,18 +17,48 @@ export interface ProviderDef {
   id: string;
   name: string;
   kind: ProviderKind;
+  /**
+   * API base URL. `{NAME}` placeholders (account/resource names) are asked for
+   * on connect, or read from the environment variable of the same name.
+   */
   baseURL?: string;
-  /** Environment variable that also supplies the key. */
-  envKey?: string;
-  /** False for providers that need no key (aiolah login, a local Ollama). */
+  /** Environment variables that also supply the key (first one set wins). */
+  envKeys?: string[];
+  /** False for providers that need no key (aiolah login, local servers). */
   needsKey: boolean;
+  /** Ask for the base URL on connect (local servers, region-specific endpoints); the default is offered. */
+  askBaseUrl?: boolean;
+  /** Header that carries the key; default `Authorization: Bearer <key>`. */
+  authHeader?: 'api-key';
   /** Where to create a key. */
   keyUrl?: string;
   /** Model used when none is chosen (only where the id is stable). */
   defaultModel?: string;
+  /** Shown near the top of the connect list. */
   popular?: boolean;
+  note?: string;
 }
 
+/** OpenAI-compatible provider with an API key. */
+function compatible(
+  id: string,
+  name: string,
+  baseURL: string,
+  envKeys: string[],
+  extra: Partial<ProviderDef> = {},
+): ProviderDef {
+  return { id, name, kind: 'openai', baseURL, envKeys, needsKey: true, ...extra };
+}
+
+/** OpenAI-compatible server on this machine (no key). */
+function local(id: string, name: string, baseURL: string): ProviderDef {
+  return { id, name, kind: 'openai', baseURL, needsKey: false, askBaseUrl: true };
+}
+
+/**
+ * Providers `aiolah connect` / `/connect` offers. Base URLs and key variables
+ * follow models.dev (the catalog opencode uses) or the provider's own docs.
+ */
 export const PROVIDERS: ProviderDef[] = [
   { id: 'aiolah', name: 'aiolah (your plan)', kind: 'aiolah', needsKey: false, popular: true },
   {
@@ -36,70 +66,162 @@ export const PROVIDERS: ProviderDef[] = [
     name: 'Anthropic',
     kind: 'anthropic',
     baseURL: 'https://api.anthropic.com',
-    envKey: 'ANTHROPIC_API_KEY',
+    envKeys: ['ANTHROPIC_API_KEY'],
     needsKey: true,
     keyUrl: 'https://console.anthropic.com/settings/keys',
     defaultModel: 'claude-sonnet-5',
     popular: true,
   },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    kind: 'openai',
-    baseURL: 'https://api.openai.com/v1',
-    envKey: 'OPENAI_API_KEY',
-    needsKey: true,
+  compatible('openai', 'OpenAI', 'https://api.openai.com/v1', ['OPENAI_API_KEY'], {
     keyUrl: 'https://platform.openai.com/api-keys',
     popular: true,
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    kind: 'openai',
-    baseURL: 'https://openrouter.ai/api/v1',
-    envKey: 'OPENROUTER_API_KEY',
-    needsKey: true,
+  }),
+  compatible(
+    'google',
+    'Google Gemini',
+    'https://generativelanguage.googleapis.com/v1beta/openai',
+    ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
+    { keyUrl: 'https://aistudio.google.com/apikey', popular: true },
+  ),
+  compatible('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1', ['OPENROUTER_API_KEY'], {
     keyUrl: 'https://openrouter.ai/settings/keys',
     popular: true,
-  },
-  {
-    id: 'google',
-    name: 'Google Gemini',
-    kind: 'openai',
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    envKey: 'GEMINI_API_KEY',
-    needsKey: true,
-    keyUrl: 'https://aistudio.google.com/apikey',
+  }),
+  compatible('opencode', 'OpenCode Zen', 'https://opencode.ai/zen/v1', ['OPENCODE_API_KEY'], {
+    keyUrl: 'https://opencode.ai/auth',
     popular: true,
-  },
-  { id: 'xai', name: 'xAI', kind: 'openai', baseURL: 'https://api.x.ai/v1', envKey: 'XAI_API_KEY', needsKey: true },
+    note: 'Zen’s free models only work inside OpenCode; paid models work here.',
+  }),
+  compatible('xai', 'xAI', 'https://api.x.ai/v1', ['XAI_API_KEY'], { keyUrl: 'https://console.x.ai', popular: true }),
+  compatible('deepseek', 'DeepSeek', 'https://api.deepseek.com', ['DEEPSEEK_API_KEY'], {
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    popular: true,
+  }),
+  compatible('302ai', '302.AI', 'https://api.302.ai/v1', ['302AI_API_KEY']),
+  compatible(
+    'azure',
+    'Azure OpenAI',
+    'https://{AZURE_RESOURCE_NAME}.openai.azure.com/openai/v1',
+    ['AZURE_API_KEY', 'AZURE_OPENAI_API_KEY'],
+    { authHeader: 'api-key', note: 'Use your deployment name as the model id.' },
+  ),
   {
-    id: 'deepseek',
-    name: 'DeepSeek',
+    id: 'bedrock',
+    name: 'Amazon Bedrock (API key)',
     kind: 'openai',
-    baseURL: 'https://api.deepseek.com/v1',
-    envKey: 'DEEPSEEK_API_KEY',
+    baseURL: 'https://bedrock-mantle.us-east-1.api.aws/v1',
+    envKeys: ['AWS_BEARER_TOKEN_BEDROCK'],
+    needsKey: true,
+    askBaseUrl: true,
+    note: 'Bedrock API key (bearer token); change us-east-1 in the URL for another region.',
+  },
+  compatible('baseten', 'Baseten', 'https://inference.baseten.co/v1', ['BASETEN_API_KEY']),
+  compatible('cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', ['CEREBRAS_API_KEY']),
+  compatible(
+    'cloudflare-workers-ai',
+    'Cloudflare Workers AI',
+    'https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1',
+    ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_API_TOKEN'],
+  ),
+  compatible('cortecs', 'Cortecs', 'https://api.cortecs.ai/v1', ['CORTECS_API_KEY']),
+  compatible('deepinfra', 'Deep Infra', 'https://api.deepinfra.com/v1/openai', ['DEEPINFRA_API_KEY']),
+  compatible('digitalocean', 'DigitalOcean', 'https://inference.do-ai.run/v1', ['DIGITALOCEAN_ACCESS_TOKEN'], {
+    note: 'Use a Model Access Key.',
+  }),
+  compatible('edenai', 'Eden AI', 'https://api.edenai.run/v3', ['EDENAI_API_KEY'], { askBaseUrl: true }),
+  compatible('fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1', ['FIREWORKS_API_KEY']),
+  compatible('frogbot', 'FrogBot', 'https://app.frogbot.ai/api/v1', ['FROGBOT_API_KEY']),
+  compatible('gmicloud', 'GMI Cloud', 'https://api.gmi-serving.com/v1', ['GMICLOUD_API_KEY']),
+  compatible('groq', 'Groq', 'https://api.groq.com/openai/v1', ['GROQ_API_KEY']),
+  compatible('helicone', 'Helicone', 'https://ai-gateway.helicone.ai/v1', ['HELICONE_API_KEY']),
+  compatible('huggingface', 'Hugging Face', 'https://router.huggingface.co/v1', ['HF_TOKEN'], {
+    keyUrl: 'https://huggingface.co/settings/tokens',
+    note: 'The token needs the “Make calls to Inference Providers” permission.',
+  }),
+  compatible('ionet', 'IO.NET', 'https://api.intelligence.io.solutions/api/v1', ['IOINTELLIGENCE_API_KEY']),
+  compatible('llmgateway', 'LLM Gateway', 'https://api.llmgateway.io/v1', ['LLMGATEWAY_API_KEY']),
+  {
+    id: 'minimax',
+    name: 'MiniMax',
+    kind: 'anthropic',
+    baseURL: 'https://api.minimax.io/anthropic',
+    envKeys: ['MINIMAX_API_KEY'],
     needsKey: true,
   },
-  {
-    id: 'groq',
-    name: 'Groq',
-    kind: 'openai',
-    baseURL: 'https://api.groq.com/openai/v1',
-    envKey: 'GROQ_API_KEY',
-    needsKey: true,
-  },
-  {
-    id: 'mistral',
-    name: 'Mistral',
-    kind: 'openai',
-    baseURL: 'https://api.mistral.ai/v1',
-    envKey: 'MISTRAL_API_KEY',
-    needsKey: true,
-  },
-  { id: 'ollama', name: 'Ollama (local)', kind: 'openai', baseURL: 'http://localhost:11434/v1', needsKey: false },
-  { id: 'custom', name: 'Custom (OpenAI-compatible URL)', kind: 'openai', needsKey: false },
+  compatible('mistral', 'Mistral', 'https://api.mistral.ai/v1', ['MISTRAL_API_KEY']),
+  compatible('modal', 'Modal', 'https://inference.us-west.modal.direct/v1', ['MODAL_PROXY_TOKEN'], {
+    askBaseUrl: true,
+    note: 'Proxy token (wk-…ws-…) of a shared endpoint.',
+  }),
+  compatible('moonshot', 'Moonshot AI (Kimi)', 'https://api.moonshot.ai/v1', ['MOONSHOT_API_KEY']),
+  compatible('nebius', 'Nebius Token Factory', 'https://api.tokenfactory.nebius.com/v1', ['NEBIUS_API_KEY']),
+  compatible('nvidia', 'NVIDIA', 'https://integrate.api.nvidia.com/v1', ['NVIDIA_API_KEY'], {
+    askBaseUrl: true,
+    keyUrl: 'https://build.nvidia.com/',
+    note: 'For an on-prem NIM use its URL, e.g. http://localhost:8000/v1.',
+  }),
+  compatible('ollama-cloud', 'Ollama Cloud', 'https://ollama.com/v1', ['OLLAMA_API_KEY']),
+  compatible('ovhcloud', 'OVHcloud AI Endpoints', 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', [
+    'OVHCLOUD_API_KEY',
+  ]),
+  compatible('poolside', 'Poolside', 'https://inference.poolside.ai/v1', ['POOLSIDE_API_KEY'], { askBaseUrl: true }),
+  compatible('scaleway', 'Scaleway', 'https://api.scaleway.ai/v1', ['SCALEWAY_API_KEY']),
+  compatible(
+    'snowflake-cortex',
+    'Snowflake Cortex',
+    'https://{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/api/v2/cortex/v1',
+    ['SNOWFLAKE_CORTEX_PAT', 'SNOWFLAKE_CORTEX_TOKEN'],
+    { note: 'Use a programmatic access token (PAT).' },
+  ),
+  compatible('stackit', 'STACKIT', 'https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1', [
+    'STACKIT_API_KEY',
+  ]),
+  compatible('together', 'Together AI', 'https://api.together.xyz/v1', ['TOGETHER_API_KEY']),
+  compatible('venice', 'Venice AI', 'https://api.venice.ai/api/v1', ['VENICE_API_KEY'], {
+    keyUrl: 'https://venice.ai/settings/api',
+  }),
+  compatible('vercel', 'Vercel AI Gateway', 'https://ai-gateway.vercel.sh/v1', ['AI_GATEWAY_API_KEY']),
+  compatible('zai', 'Z.AI', 'https://api.z.ai/api/paas/v4', ['ZHIPU_API_KEY', 'ZAI_API_KEY'], {
+    keyUrl: 'https://z.ai/manage-apikey/apikey-list',
+  }),
+  compatible('zai-coding-plan', 'Z.AI Coding Plan', 'https://api.z.ai/api/coding/paas/v4', [
+    'ZHIPU_API_KEY',
+    'ZAI_API_KEY',
+  ]),
+  compatible('zenmux', 'ZenMux', 'https://zenmux.ai/api/v1', ['ZENMUX_API_KEY']),
+  compatible(
+    'dashscope',
+    'Alibaba Cloud Model Studio (Qwen)',
+    'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    ['DASHSCOPE_API_KEY'],
+    { askBaseUrl: true },
+  ),
+  compatible('agnes', 'Agnes AI', 'https://apihub.agnes-ai.com/v1', ['AGNES_API_KEY']),
+  compatible('featherless', 'Featherless', 'https://api.featherless.ai/v1', ['FEATHERLESS_API_KEY']),
+  local('ollama', 'Ollama (local)', 'http://localhost:11434/v1'),
+  local('lmstudio', 'LM Studio (local)', 'http://127.0.0.1:1234/v1'),
+  local('llama.cpp', 'llama.cpp server (local)', 'http://127.0.0.1:8080/v1'),
+  local('atomic-chat', 'Atomic Chat (local)', 'http://127.0.0.1:1337/v1'),
+  { id: 'custom', name: 'Other (any OpenAI-compatible URL)', kind: 'openai', needsKey: false },
 ];
+
+/** `{NAME}` placeholders in a base URL template. */
+export function urlPlaceholders(url: string): string[] {
+  return [...url.matchAll(/\{([A-Z0-9_]+)\}/g)].map((match) => match[1]!);
+}
+
+/** Fills `{NAME}` placeholders from the environment; undefined while any is missing. */
+function resolveTemplate(url: string): string | undefined {
+  let resolved = url;
+  for (const name of urlPlaceholders(url)) {
+    const value = process.env[name];
+    if (!value) {
+      return undefined;
+    }
+    resolved = resolved.replace(`{${name}}`, value);
+  }
+  return resolved;
+}
 
 interface StoredProvider {
   apiKey?: string;
@@ -129,6 +251,11 @@ function writeFile(data: ProvidersFile): void {
   chmodSync(PROVIDERS_FILE, 0o600);
 }
 
+/** Headers that carry a provider's API key. */
+export function authHeaders(def: ProviderDef, apiKey: string): Record<string, string> {
+  return def.authHeader === 'api-key' ? { 'api-key': apiKey } : { Authorization: `Bearer ${apiKey}` };
+}
+
 export function providerDef(id: string): ProviderDef {
   const def = PROVIDERS.find((provider) => provider.id === id);
   if (!def) {
@@ -141,9 +268,10 @@ export function providerDef(id: string): ProviderDef {
 export function providerCredentials(id: string): { apiKey?: string; baseURL?: string } {
   const def = providerDef(id);
   const stored = readFile().providers[id] ?? {};
+  const fromEnv = def.envKeys?.map((name) => process.env[name]).find((value) => value);
   return {
-    apiKey: stored.apiKey || (def.envKey ? process.env[def.envKey] || undefined : undefined),
-    baseURL: (stored.baseURL || def.baseURL)?.replace(/\/+$/, ''),
+    apiKey: stored.apiKey || fromEnv || undefined,
+    baseURL: (stored.baseURL || (def.baseURL ? resolveTemplate(def.baseURL) : undefined))?.replace(/\/+$/, ''),
   };
 }
 
@@ -243,7 +371,7 @@ export async function listProviderModels(provider: string): Promise<string[]> {
     def.kind === 'anthropic'
       ? { 'x-api-key': apiKey ?? '', 'anthropic-version': '2023-06-01' }
       : apiKey
-        ? { Authorization: `Bearer ${apiKey}` }
+        ? authHeaders(def, apiKey)
         : {};
   const url = def.kind === 'anthropic' ? `${baseURL}/v1/models?limit=100` : `${baseURL}/models`;
   const response = await fetch(url, { headers: { Accept: 'application/json', ...headers } });

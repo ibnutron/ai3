@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { readAuth, serverUrl } from './config.js';
-import { providerCredentials, providerDef } from './providers.js';
+import { authHeaders, providerCredentials, providerDef } from './providers.js';
 
 type MessageParam = Anthropic.MessageParam;
 
@@ -45,7 +45,7 @@ export function createModelClient(provider: string): ModelClient {
   const { apiKey, baseURL } = providerCredentials(provider);
   if (def.needsKey && !apiKey) {
     throw new Error(
-      `No API key for ${def.name}. Run \`aiolah connect ${provider}\`${def.envKey ? ` or set ${def.envKey}` : ''}.`,
+      `No API key for ${def.name}. Run \`aiolah connect ${provider}\`${def.envKeys?.length ? ` or set ${def.envKeys[0]}` : ''}.`,
     );
   }
 
@@ -81,7 +81,7 @@ function openAiClient(provider: string, baseURL: string, apiKey?: string): Model
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(apiKey ? authHeaders(providerDef(provider), apiKey) : {}),
           // OpenRouter attribution headers; ignored by other providers.
           'HTTP-Referer': 'https://aiolah.com',
           'X-Title': 'aiolah CLI',
