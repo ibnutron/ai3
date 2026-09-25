@@ -11,11 +11,7 @@ export function sessionsListCommand(): void {
   for (const session of sessions) {
     const firstUserMessage = session.history.find((message) => message.role === 'user');
     const snippet =
-      typeof firstUserMessage?.content === 'string'
-        ? firstUserMessage.content.slice(0, 60)
-        : '(tool result)';
-    stdout.write(
-      `${session.id}  ${session.updatedAt}  ${session.workspace}\n  ${snippet}\n`,
-    );
+      typeof firstUserMessage?.content === 'string' ? firstUserMessage.content.slice(0, 60) : '(tool result)';
+    stdout.write(`${session.id}  ${session.updatedAt}  ${session.workspace}\n  ${snippet}\n`);
   }
 }

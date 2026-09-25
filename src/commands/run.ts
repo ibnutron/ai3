@@ -3,13 +3,14 @@ import { resolve } from 'node:path';
 import { ChatSession } from '../session.js';
 import { SessionSync } from '../sessionSync.js';
 import { findLatestSession } from '../persistence.js';
-import { resolveModel } from '../models.js';
+import { resolveSelection } from '../providers.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
 const STDIN_GRACE_MS = 300;
 
 interface RunOptions extends PermissionOptions {
   model?: string;
+  provider?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
@@ -48,7 +49,7 @@ export async function runCommand(promptParts: string[], options: RunOptions): Pr
 
   const resumeId = options.resume ?? (options.continue ? findLatestSession()?.id : undefined);
   const session = new ChatSession({
-    model: await resolveModel(options.model),
+    ...(await resolveSelection(options)),
     workspaceRoot: resolve(options.workspace),
     confirm,
     resumeId,

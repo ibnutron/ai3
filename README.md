@@ -87,6 +87,52 @@ The list is read live from aiolah, so models enabled later (or a plan upgrade)
 show up without updating the CLI. Without `--model`, your plan's default model
 is used.
 
+## Providers & your own keys
+
+Besides your aiolah plan, the CLI can use your own API key from another
+provider. Tool calls (reading, editing files, running commands) work the same.
+
+```bash
+aiolah connect                  # pick a provider, paste the key
+aiolah connect openrouter       # or name it
+aiolah models --provider openrouter
+aiolah -P openrouter -m <model-id>
+aiolah disconnect openrouter
+```
+
+| Provider | id | Key from |
+|---|---|---|
+| aiolah (your plan) | `aiolah` | `aiolah auth login` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
+| Google Gemini | `google` | `GEMINI_API_KEY` |
+| xAI | `xai` | `XAI_API_KEY` |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` |
+| Groq | `groq` | `GROQ_API_KEY` |
+| Mistral | `mistral` | `MISTRAL_API_KEY` |
+| Ollama (local) | `ollama` | no key, `http://localhost:11434/v1` |
+| Any OpenAI-compatible URL | `custom` | base URL + optional key |
+
+Keys are saved in `~/.aiolah/providers.json` (readable only by you) and never
+sent to aiolah; calls go straight from your machine to the provider, billed to
+your own account. The last provider and model you pick in chat are remembered.
+Without a choice, `ANTHROPIC_API_KEY` (when set) selects Anthropic, otherwise
+your aiolah plan is used.
+
+Inside `aiolah chat`, type `/` commands:
+
+| Command | Description |
+|---|---|
+| `/connect [provider]` | Connect aiolah or a provider key. |
+| `/disconnect <provider>` | Remove a provider key (or sign out of aiolah). |
+| `/provider [id]` | Switch provider, keeping the conversation. |
+| `/model [id]` | Switch model; without an id, pick from the provider's list. |
+| `/models` | List the current provider's models. |
+| `/sessions` | List saved sessions. |
+| `/status` | Show provider, model, session and login. |
+| `/help`, `/exit` | Help, quit. |
+
 ## Permissions
 
 Choose how much the agent may do without asking with `--permission-mode`
@@ -107,7 +153,9 @@ Every command accepts `-h, --help`; `aiolah -v` prints the version.
 | `aiolah auth login` | Sign in through your browser (`--server <url>`, `--no-browser`). Shortcut: `aiolah login`. |
 | `aiolah auth status` | Show the signed-in account and which credentials model calls use. Alias: `auth list`. |
 | `aiolah auth logout` | Sign out and revoke this machine's token. Shortcut: `aiolah logout`. |
-| `aiolah models` | List the coding models your plan can use. |
+| `aiolah models` | List the coding models your plan can use (`--provider <id>` for a connected provider). |
+| `aiolah connect [provider]` | Save your own API key for a provider (see Providers). |
+| `aiolah disconnect <provider>` | Remove a saved provider key. |
 | `aiolah [chat]` | Interactive agent in the terminal. |
 | `aiolah run [prompt...]` / `aiolah -p "<prompt>"` | Non-interactive: answer one prompt and exit (`--output-format text\|json`). |
 | `aiolah remote-control [name]` / `aiolah rc [name]` | Control this folder from aiolah (`-n, --name <name>`). |
@@ -122,6 +170,7 @@ Session flags (chat, run, rc, serve):
 | Flag | Description |
 |---|---|
 | `-m, --model <id>` | Model to use (see `aiolah models`). |
+| `-P, --provider <id>` | Provider to use: `aiolah` or one you connected. |
 | `-w, --workspace <dir>` | Folder the agent may read and change (default: current folder). |
 | `-c, --continue` | Continue the most recently used session. |
 | `-r, --resume <id>` | Resume a saved session by id. |
@@ -133,6 +182,7 @@ Session flags (chat, run, rc, serve):
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Call Anthropic directly with your own key instead of your aiolah plan (default model `claude-sonnet-5`). |
+| `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY` | Keys for those providers when none is saved with `aiolah connect`. |
 | `AIOLAH_SERVER` | aiolah server URL (default `https://aiolah.com`). Overrides the server saved at login. |
 | `AIOLAH_RELAY_URL` | Relay URL for remote control (default `<server>/cli-relay`). |
 | `AIOLAH_REMOTE_TOKEN` | Shared secret for direct mode (`serve --port` and `attach`). |
@@ -152,8 +202,11 @@ Empty values count as unset.
   prompts, answers, tool calls and tool results (including file contents, up
   to 20 KB per result) are sent to aiolah so they can be read on the Code page
   even when the device is offline.
-- **Your own key bypasses aiolah.** With `ANTHROPIC_API_KEY` set, model calls go
-  straight to Anthropic and aiolah does not see or log them.
+- **Your own keys bypass the aiolah proxy.** With a provider from
+  `aiolah connect` (or `ANTHROPIC_API_KEY`), model calls go straight to that
+  provider and are not logged as prompts. Keys stay on your machine. If you are
+  also signed in, the session transcript is still saved to your account (see
+  above); run `aiolah auth logout` to keep it local only.
 - **Local history.** Full sessions (conversation, tool calls, file contents) are
   saved as plain JSON in `~/.aiolah/sessions/` on the machine running the agent.
   Your login token is in `~/.aiolah/auth.json` (mode 0600).

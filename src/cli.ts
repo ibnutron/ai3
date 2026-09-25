@@ -11,6 +11,7 @@ import { sessionsListCommand } from './commands/sessions.js';
 import { loginCommand, logoutCommand, statusCommand } from './commands/login.js';
 import { relayCommand } from './commands/relay.js';
 import { modelsCommand } from './commands/models.js';
+import { connectCommand, disconnectCommand } from './commands/connect.js';
 import { runCommand } from './commands/run.js';
 import { upgradeCommand } from './commands/upgrade.js';
 import { doctorCommand } from './commands/doctor.js';
@@ -49,7 +50,8 @@ addPermissionOptions(
   program
     .command('chat')
     .description('Start an interactive chat session in this terminal')
-    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: the provider\'s default)')
+    .option('-P, --provider <id>', 'model provider: aiolah (your plan) or one you connected (see "aiolah connect")')
     .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
     .option('-r, --resume <id>', 'resume a saved session by id')
     .option('-c, --continue', 'resume the most recently updated session'),
@@ -64,7 +66,8 @@ addPermissionOptions(
     )
     .option('-p, --port <port>', 'direct mode: listen on this port instead of connecting to the aiolah relay')
     .option('-n, --name <name>', 'relay mode: device name shown on /code')
-    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: the provider\'s default)')
+    .option('-P, --provider <id>', 'model provider: aiolah (your plan) or one you connected (see "aiolah connect")')
     .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
     .option('-r, --resume <id>', 'resume a saved session by id')
     .option('-c, --continue', 'resume the most recently updated session')
@@ -81,7 +84,8 @@ addPermissionOptions(
     .description('Control this folder from aiolah /code, the app or VS Code (needs "aiolah auth login")')
     .argument('[name]', 'device name shown on /code (default: "<hostname> · <folder>")')
     .option('-n, --name <name>', 'device name shown on /code')
-    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: the provider\'s default)')
+    .option('-P, --provider <id>', 'model provider: aiolah (your plan) or one you connected (see "aiolah connect")')
     .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
     .option('-r, --resume <id>', 'resume a saved session by id')
     .option('-c, --continue', 'resume the most recently updated session'),
@@ -96,7 +100,8 @@ addPermissionOptions(
       'Run one prompt non-interactively and print the answer (also: aiolah -p "<prompt>"); piped stdin is appended',
     )
     .argument('[prompt...]', 'the prompt')
-    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: the provider\'s default)')
+    .option('-P, --provider <id>', 'model provider: aiolah (your plan) or one you connected (see "aiolah connect")')
     .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
     .option('-r, --resume <id>', 'continue a saved session by id')
     .option('-c, --continue', 'continue the most recently updated session')
@@ -108,7 +113,25 @@ program
   .description('Attach to a running "aiolah serve" session, e.g. aiolah attach ws://host:4317')
   .action(attachCommand);
 
-program.command('models').description('List the coding models available to your aiolah account').action(modelsCommand);
+program
+  .command('connect')
+  .description(
+    'Connect a model provider: your aiolah account or your own key (Anthropic, OpenAI, OpenRouter, Google, …)',
+  )
+  .argument('[provider]', 'provider id (omit to choose from a list)')
+  .action(connectCommand);
+
+program
+  .command('disconnect')
+  .description("Remove a provider's stored key (or sign out of aiolah)")
+  .argument('<provider>', 'provider id')
+  .action(disconnectCommand);
+
+program
+  .command('models')
+  .description('List models: your aiolah plan by default, or a connected provider with --provider')
+  .option('-P, --provider <id>', 'provider id (default: the active provider)')
+  .action(modelsCommand);
 
 program
   .command('relay')

@@ -5,11 +5,13 @@ import { ChatSession } from '../session.js';
 import { SessionSync } from '../sessionSync.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
-import { resolveModel } from '../models.js';
+import { handleSlash } from '../slash.js';
+import { resolveProvider, resolveProviderModel } from '../providers.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
 interface ChatOptions extends PermissionOptions {
   model?: string;
+  provider?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
@@ -26,7 +28,16 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
     return answer?.trim().toLowerCase() === 'y';
   });
 
-  const session = new ChatSession({ model: await resolveModel(options.model), workspaceRoot, confirm, resumeId });
+  // A provider without a chosen model still opens the chat, so /model can pick one.
+  const provider = resolveProvider(options.provider);
+  let model = '';
+  let modelHint: string | undefined;
+  try {
+    model = await resolveProviderModel(provider, options.model);
+  } catch (error) {
+    modelHint = error instanceof Error ? error.message : String(error);
+  }
+  const session = new ChatSession({ provider, model, workspaceRoot, confirm, resumeId });
 
   session.on('tool', ({ name, input }) => {
     stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
@@ -34,9 +45,12 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
   const sync = SessionSync.attach(session, { origin: 'terminal' });
 
   stdout.write(
-    `aiolah chat — model ${session.modelId}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
-      `Type "exit" to quit.\n`,
+    `aiolah chat — ${session.providerId} · ${session.modelId || 'no model'}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
+      `Type /help for commands, "exit" to quit.\n`,
   );
+  if (modelHint) {
+    stdout.write(`${modelHint}\n`);
+  }
 
   try {
     while (true) {
@@ -45,6 +59,15 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
         break;
       }
       if (!input.trim()) {
+        continue;
+      }
+      if (input.trim().startsWith('/')) {
+        if ((await handleSlash(input, rl, session)) === 'exit') break;
+        continue;
+      }
+
+      if (!session.modelId) {
+        stdout.write('Choose a model first: /model\n');
         continue;
       }
 

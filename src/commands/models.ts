@@ -1,10 +1,22 @@
 import { stdout } from 'node:process';
 import { fetchModels } from '../models.js';
+import { activeSelection, listProviderModels, providerDef, resolveProvider } from '../providers.js';
 
-export async function modelsCommand(): Promise<void> {
-  if (process.env.ANTHROPIC_API_KEY) {
-    stdout.write('ANTHROPIC_API_KEY is set: model calls go to Anthropic directly, pass any Anthropic model id with --model.\n\n');
+/** `aiolah models [--provider id]` — the aiolah plan's coding models, or a connected provider's. */
+export async function modelsCommand(options: { provider?: string }): Promise<void> {
+  const provider = resolveProvider(options.provider);
+  const active = activeSelection();
+
+  if (providerDef(provider).kind !== 'aiolah') {
+    const models = await listProviderModels(provider);
+    const current = active?.provider === provider ? active.model : undefined;
+    stdout.write(models.map((id) => `${id}${id === current ? '  (active)' : ''}`).join('\n') + '\n');
+    stdout.write(
+      `\n${models.length} models on ${providerDef(provider).name}. Use one with --provider ${provider} --model <id>.\n`,
+    );
+    return;
   }
+
   const { default: fallback, data } = await fetchModels();
   if (data.length === 0) {
     stdout.write('No coding models are available for your aiolah plan right now.\n');
@@ -14,5 +26,5 @@ export async function modelsCommand(): Promise<void> {
   for (const model of data) {
     stdout.write(`${model.id.padEnd(width)}  ${model.name}${model.id === fallback ? '  (default)' : ''}\n`);
   }
-  stdout.write('\nUse one with --model <id>, e.g. aiolah rc --model <id>\n');
+  stdout.write('\nUse one with --model <id>. Other providers: aiolah connect, then aiolah models --provider <id>.\n');
 }

@@ -1,8 +1,5 @@
 import { apiRequest, readAuth, serverUrl } from './config.js';
 
-/** Default when calling Anthropic directly with the user's own ANTHROPIC_API_KEY. */
-export const DIRECT_DEFAULT_MODEL = 'claude-sonnet-5';
-
 export interface CliModel {
   id: string;
   name: string;
@@ -31,19 +28,4 @@ export async function fetchModels(): Promise<{ default: string | null; data: Cli
     throw new Error(`Could not load models from aiolah (HTTP ${response.status}).`);
   }
   return response.data;
-}
-
-/** `--model` wins; otherwise Claude on a personal key, or the account's default model on aiolah. */
-export async function resolveModel(explicit?: string): Promise<string> {
-  if (explicit) {
-    return explicit;
-  }
-  if (process.env.ANTHROPIC_API_KEY) {
-    return DIRECT_DEFAULT_MODEL;
-  }
-  const { default: fallback } = await fetchModels();
-  if (!fallback) {
-    throw new Error('No coding model is available for your aiolah plan right now.');
-  }
-  return fallback;
 }

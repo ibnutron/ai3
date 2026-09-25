@@ -39,7 +39,11 @@ export async function fetchRegistryInfo(): Promise<RegistryInfo> {
 
 /** Numeric semver compare (ignores pre-release tags): <0 if a<b, 0 if equal, >0 if a>b. */
 export function compareVersions(a: string, b: string): number {
-  const parse = (value: string) => value.split('-')[0]!.split('.').map((part) => Number(part) || 0);
+  const parse = (value: string) =>
+    value
+      .split('-')[0]!
+      .split('.')
+      .map((part) => Number(part) || 0);
   const [left, right] = [parse(a), parse(b)];
   for (let i = 0; i < Math.max(left.length, right.length); i++) {
     const diff = (left[i] ?? 0) - (right[i] ?? 0);

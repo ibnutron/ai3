@@ -191,7 +191,9 @@ export async function relayCommand(options: RelayOptions): Promise<void> {
     }
     const [hostId, userId, expires, nonce, signature] = parts as [string, string, string, string, string];
     const expected = Buffer.from(
-      createHmac('sha256', secret as string).update([hostId, userId, expires, nonce].join('.')).digest('hex'),
+      createHmac('sha256', secret as string)
+        .update([hostId, userId, expires, nonce].join('.'))
+        .digest('hex'),
     );
     const actual = Buffer.from(signature);
     const now = Math.floor(Date.now() / 1000);

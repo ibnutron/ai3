@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdout } from 'node:process';
 import { apiRequest, readAuth, relayHostUrl, serverUrl } from '../config.js';
+import { activeSelection, isConnected, providerDef, resolveProvider } from '../providers.js';
 import { compareVersions, fetchRegistryInfo, isNpmInstall, packageRoot, packageVersion } from '../version.js';
 
 type Status = 'ok' | 'warn' | 'fail';
@@ -21,7 +22,11 @@ export async function doctorCommand(): Promise<void> {
   };
 
   const version = packageVersion();
-  report('ok', 'Version', `aiolah ${version} (${isNpmInstall() ? 'npm install' : 'source checkout'} at ${packageRoot()})`);
+  report(
+    'ok',
+    'Version',
+    `aiolah ${version} (${isNpmInstall() ? 'npm install' : 'source checkout'} at ${packageRoot()})`,
+  );
 
   try {
     const { latest } = await fetchRegistryInfo();
@@ -37,17 +42,33 @@ export async function doctorCommand(): Promise<void> {
   }
 
   const nodeMajor = Number(process.versions.node.split('.')[0]);
-  report(nodeMajor >= 22 ? 'ok' : 'fail', 'Node.js', `${process.versions.node}${nodeMajor >= 22 ? '' : ' — aiolah needs Node.js 22 or newer'}`);
+  report(
+    nodeMajor >= 22 ? 'ok' : 'fail',
+    'Node.js',
+    `${process.versions.node}${nodeMajor >= 22 ? '' : ' — aiolah needs Node.js 22 or newer'}`,
+  );
 
   const auth = readAuth();
   const server = serverUrl(auth);
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    report('ok', 'Model calls', 'ANTHROPIC_API_KEY is set — calls go to Anthropic with your own key');
-  } else if (auth) {
-    report('ok', 'Model calls', 'through aiolah with your login (billed to your plan)');
+  const provider = resolveProvider();
+  const def = providerDef(provider);
+  if (def.kind === 'aiolah') {
+    report(
+      auth ? 'ok' : 'fail',
+      'Model calls',
+      auth
+        ? 'through aiolah with your login (billed to your plan)'
+        : 'no credentials — run "aiolah auth login" or "aiolah connect <provider>"',
+    );
+  } else if (isConnected(provider)) {
+    report(
+      'ok',
+      'Model calls',
+      `${def.name} with your own key${activeSelection()?.model ? ` · ${activeSelection()?.model}` : ''}`,
+    );
   } else {
-    report('fail', 'Model calls', 'no credentials — run "aiolah auth login" or set ANTHROPIC_API_KEY');
+    report('fail', 'Model calls', `${def.name} is selected but has no key — run "aiolah connect ${provider}"`);
   }
 
   const authFile = join(homedir(), '.aiolah', 'auth.json');
@@ -78,7 +99,11 @@ export async function doctorCommand(): Promise<void> {
         if (models.status === 200 && models.data.data.length > 0) {
           report('ok', 'Models', `${models.data.data.length} available, default ${models.data.default}`);
         } else {
-          report(models.status === 200 ? 'warn' : 'fail', 'Models', models.status === 200 ? 'none available for your plan' : `HTTP ${models.status}`);
+          report(
+            models.status === 200 ? 'warn' : 'fail',
+            'Models',
+            models.status === 200 ? 'none available for your plan' : `HTTP ${models.status}`,
+          );
         }
       } else {
         report('fail', 'Login', `token rejected (HTTP ${me.status}) — run "aiolah auth login"`);
@@ -87,10 +112,16 @@ export async function doctorCommand(): Promise<void> {
       report('fail', 'Login', `could not verify (${message(error)})`);
     }
 
-    const relayHealth = relayHostUrl(server).replace(/^ws/i, 'http').replace(/\/host$/, '/health');
+    const relayHealth = relayHostUrl(server)
+      .replace(/^ws/i, 'http')
+      .replace(/\/host$/, '/health');
     try {
       const relay = await fetch(relayHealth);
-      report(relay.ok ? 'ok' : 'warn', 'Relay', `${relayHealth} (HTTP ${relay.status})${relay.ok ? '' : ' — "aiolah rc" will not connect'}`);
+      report(
+        relay.ok ? 'ok' : 'warn',
+        'Relay',
+        `${relayHealth} (HTTP ${relay.status})${relay.ok ? '' : ' — "aiolah rc" will not connect'}`,
+      );
     } catch (error) {
       report('warn', 'Relay', `${relayHealth} unreachable (${message(error)}) — "aiolah rc" will not connect`);
     }

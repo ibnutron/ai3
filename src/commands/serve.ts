@@ -12,7 +12,7 @@ import { generateNonce, verifyChallenge } from '../auth.js';
 import { apiRequest, machineIdFor, readAuth, relayHostUrl, serverUrl, type StoredAuth } from '../config.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
-import { resolveModel } from '../models.js';
+import { resolveSelection } from '../providers.js';
 import { SESSION_SELECTOR, type RelayFrame, type WireMessage } from '../protocol.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
@@ -20,6 +20,7 @@ interface ServeOptions extends PermissionOptions {
   port?: string;
   name?: string;
   model?: string;
+  provider?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
@@ -73,7 +74,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     );
   }
 
-  const model = await resolveModel(options.model);
+  const selection = await resolveSelection(options);
   const permissionMode = resolvePermissionMode(options);
   const deviceName = options.name?.trim() || `${hostname()} · ${basename(workspaceRoot) || workspaceRoot}`;
   const hostId = relayMode ? await registerHost(auth as StoredAuth, workspaceRoot, deviceName) : undefined;
@@ -101,11 +102,13 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
           };
           pendingConfirms.set(id, settle);
           broadcast(runtime, { type: 'confirm', id, description });
-          stdout.write(`\n[confirm ${session.sessionId}] Allow ${description}? Type y or n here, or answer from a client.\n`);
+          stdout.write(
+            `\n[confirm ${session.sessionId}] Allow ${description}? Type y or n here, or answer from a client.\n`,
+          );
         }),
     );
 
-    const session = new ChatSession({ model, workspaceRoot, confirm, resumeId: sessionToResume });
+    const session = new ChatSession({ ...selection, workspaceRoot, confirm, resumeId: sessionToResume });
     session.hostId = hostId;
     const runtime: SessionRuntime = {
       session,

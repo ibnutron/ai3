@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import Anthropic from '@anthropic-ai/sdk';
 import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
 import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
-import { readAuth, serverUrl } from './config.js';
+import { createModelClient, type ModelClient } from './modelClient.js';
 import { packageVersion } from './version.js';
 import type { HistoryItem } from './protocol.js';
 
@@ -20,10 +20,11 @@ export interface ChatTurnResult {
 export type PromptOrigin = 'terminal' | 'remote' | 'script';
 
 export interface ChatSessionOptions {
+  /** Provider id (see providers.ts), e.g. `aiolah`, `anthropic`, `openrouter`. */
+  provider: string;
   model: string;
   workspaceRoot: string;
   confirm: ConfirmFn;
-  apiKey?: string;
   resumeId?: string;
 }
 
@@ -40,12 +41,10 @@ export interface ChatSessionOptions {
  * `turn_error` { message }.
  */
 export class ChatSession extends EventEmitter {
-  private readonly client: Anthropic;
-  /** True when model calls go through the aiolah proxy (login), not a personal key. */
-  private readonly viaAiolah: boolean;
+  private client: ModelClient;
   /** Device id on aiolah once `serve`/`rc` has registered it; sent with each prompt. */
   hostId?: number;
-  private readonly model: string;
+  private model: string;
   private readonly workspaceRoot: string;
   private readonly confirm: ConfirmFn;
   private readonly id: string;
@@ -54,7 +53,7 @@ export class ChatSession extends EventEmitter {
 
   constructor(options: ChatSessionOptions) {
     super();
-    ({ client: this.client, viaAiolah: this.viaAiolah } = createAnthropicClient(options.apiKey));
+    this.client = createModelClient(options.provider);
     this.model = options.model;
     this.workspaceRoot = options.workspaceRoot;
     this.confirm = async (description, tool) => {
@@ -86,6 +85,16 @@ export class ChatSession extends EventEmitter {
     return this.model;
   }
 
+  get providerId(): string {
+    return this.client.provider;
+  }
+
+  /** Switch provider/model mid-session; the history carries over (it is provider-neutral). */
+  useModel(provider: string, model: string): void {
+    this.client = createModelClient(provider);
+    this.model = model;
+  }
+
   get workspace(): string {
     return this.workspaceRoot;
   }
@@ -111,9 +120,7 @@ export class ChatSession extends EventEmitter {
           const result =
             typeof block.content === 'string'
               ? block.content
-              : (block.content ?? [])
-                  .map((part) => (part.type === 'text' ? part.text : ''))
-                  .join('');
+              : (block.content ?? []).map((part) => (part.type === 'text' ? part.text : '')).join('');
           items.push({ role: 'tool', name: call?.name ?? 'unknown', input: call?.input, result });
           pendingTools.delete(block.tool_use_id);
         }
@@ -139,7 +146,7 @@ export class ChatSession extends EventEmitter {
     this.history.push({ role: 'user', content: userMessage });
 
     // Context for aiolah's prompt log; never sent to Anthropic directly.
-    const headers = this.viaAiolah
+    const headers = this.client.viaAiolah
       ? {
           'X-Aiolah-Session': this.id,
           'X-Aiolah-Origin': origin,
@@ -149,14 +156,14 @@ export class ChatSession extends EventEmitter {
       : undefined;
 
     while (true) {
-      const response = await this.client.messages.create(
+      const response = await this.client.create(
         {
           model: this.model,
           max_tokens: 4096,
           tools: TOOL_SCHEMAS,
           messages: this.history,
         },
-        { headers },
+        headers,
       );
 
       this.history.push({ role: 'assistant', content: response.content });
@@ -201,34 +208,9 @@ export class ChatSession extends EventEmitter {
       workspace: this.workspaceRoot,
       createdAt: this.createdAt,
       updatedAt: new Date().toISOString(),
+      provider: this.client.provider,
       history: this.history,
     };
     saveSession(record);
   }
-}
-
-/**
- * Precedence: an explicit key or `ANTHROPIC_API_KEY` talks
- * to Anthropic directly on the user's own account; otherwise the token from
- * `aiolah auth login` goes through the aiolah proxy and is billed to the plan.
- */
-function createAnthropicClient(explicitKey?: string): { client: Anthropic; viaAiolah: boolean } {
-  const apiKey = explicitKey || process.env.ANTHROPIC_API_KEY;
-  if (apiKey) {
-    return { client: new Anthropic({ apiKey }), viaAiolah: false };
-  }
-
-  const auth = readAuth();
-  if (auth) {
-    return {
-      client: new Anthropic({
-        apiKey: null,
-        authToken: auth.token,
-        baseURL: `${serverUrl(auth)}/api/cli/anthropic`,
-      }),
-      viaAiolah: true,
-    };
-  }
-
-  throw new Error('Not logged in. Run `aiolah auth login` (or set ANTHROPIC_API_KEY to use your own key).');
 }

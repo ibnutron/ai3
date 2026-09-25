@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import { stdout } from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { apiRequest, clearAuth, readAuth, serverUrl, writeAuth } from '../config.js';
+import { PROVIDERS, activeSelection, isConnected, resolveProvider } from '../providers.js';
 
 interface LoginOptions {
   server?: string;
@@ -100,6 +101,12 @@ export async function logoutCommand(): Promise<void> {
 
 export async function statusCommand(): Promise<void> {
   const auth = readAuth();
+  const active = activeSelection();
+  const connected = PROVIDERS.filter((provider) => provider.kind !== 'aiolah' && isConnected(provider.id));
+  stdout.write(
+    `Active provider: ${resolveProvider()}${active?.model ? ` · ${active.model}` : ''}\n` +
+      `Own keys: ${connected.length ? connected.map((provider) => provider.id).join(', ') : 'none (aiolah connect <provider>)'}\n`,
+  );
   if (process.env.ANTHROPIC_API_KEY) {
     stdout.write('Model calls: ANTHROPIC_API_KEY is set, so chat uses your own Anthropic key.\n');
   }
@@ -112,7 +119,9 @@ export async function statusCommand(): Promise<void> {
     token: auth.token,
   });
   if (me.status !== 200 || !me.data.user) {
-    stdout.write(`Stored login for ${auth.server} is no longer valid (HTTP ${me.status}). Run \`aiolah auth login\`.\n`);
+    stdout.write(
+      `Stored login for ${auth.server} is no longer valid (HTTP ${me.status}). Run \`aiolah auth login\`.\n`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -120,8 +129,7 @@ export async function statusCommand(): Promise<void> {
 }
 
 function openBrowser(url: string): void {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
   try {
     const child = spawn(command, [url], { detached: true, stdio: 'ignore' });
     child.on('error', () => {});
