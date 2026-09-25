@@ -19,7 +19,14 @@ interface HostEntry {
 
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const PING_INTERVAL_MS = 30_000;
-const CLIENT_MESSAGE_TYPES = new Set(['user', 'confirm_reply', 'open_session']);
+const CLIENT_MESSAGE_TYPES = new Set([
+  'user',
+  'confirm_reply',
+  'open_session',
+  'list_models',
+  'set_model',
+  'interrupt',
+]);
 
 /**
  * `aiolah relay` — the rendezvous point that lets a logged-in `aiolah serve`

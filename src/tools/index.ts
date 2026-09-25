@@ -64,6 +64,8 @@ export const TOOL_SCHEMAS: Anthropic.Tool[] = [
 export interface ToolExecutionContext {
   workspaceRoot: string;
   confirm: ConfirmFn;
+  /** Aborts a running shell command when the turn is interrupted. */
+  signal?: AbortSignal;
 }
 
 export async function executeTool(
@@ -71,7 +73,7 @@ export async function executeTool(
   input: Record<string, unknown>,
   context: ToolExecutionContext,
 ): Promise<string> {
-  const { workspaceRoot, confirm } = context;
+  const { workspaceRoot, confirm, signal } = context;
 
   switch (name) {
     case 'read_file':
@@ -103,7 +105,7 @@ export async function executeTool(
       if (!(await confirm(`run_bash: ${command}`, 'run_bash'))) {
         return 'User declined this action.';
       }
-      const result = await runBash(workspaceRoot, command);
+      const result = await runBash(workspaceRoot, command, signal);
       return `exit code: ${result.exitCode}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`;
     }
 

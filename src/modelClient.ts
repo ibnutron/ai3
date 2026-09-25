@@ -24,7 +24,7 @@ export interface ModelResponse {
 export interface ModelClient {
   readonly provider: string;
   readonly viaAiolah: boolean;
-  create(request: ModelRequest, headers?: Record<string, string>): Promise<ModelResponse>;
+  create(request: ModelRequest, headers?: Record<string, string>, signal?: AbortSignal): Promise<ModelResponse>;
 }
 
 export function createModelClient(provider: string): ModelClient {
@@ -63,8 +63,8 @@ function anthropicClient(provider: string, client: Anthropic, viaAiolah: boolean
   return {
     provider,
     viaAiolah,
-    async create(request, headers) {
-      const response = await client.messages.create(request, headers ? { headers } : undefined);
+    async create(request, headers, signal) {
+      const response = await client.messages.create(request, { ...(headers ? { headers } : {}), signal });
       return { content: response.content, stop_reason: response.stop_reason };
     },
   };
@@ -74,9 +74,10 @@ function openAiClient(provider: string, baseURL: string, apiKey?: string): Model
   return {
     provider,
     viaAiolah: false,
-    async create(request) {
+    async create(request, _headers, signal) {
       const response = await fetch(`${baseURL}/chat/completions`, {
         method: 'POST',
+        signal,
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',

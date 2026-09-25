@@ -276,6 +276,16 @@ JSON messages over one WebSocket:
 4. When a tool needs approval: `{type:"confirm", id, description}` to every
    client; the first `{type:"confirm_reply", id, allow}` (or `y`/`n` on the host
    terminal) wins. No answer within 5 minutes counts as denied.
+5. Since 0.1.2 (`authed` then also carries `provider`):
+   - `{type:"user", text, images}` attaches up to 4 images
+     (`{media_type, data}` with base64 data, 3.5 MB of base64 in total); other
+     clients receive `{type:"user", text, imageCount}`.
+   - `{type:"list_models"}` → `{type:"models", provider, current, models}`
+     (`models`: `{id, name?}`), the models this session can switch to.
+   - `{type:"set_model", model}` (while idle) switches the session's model;
+     every client receives `{type:"model", provider, model}`.
+   - `{type:"interrupt"}` stops the running turn (model call or shell command);
+     clients receive `{type:"interrupted"}` and `{type:"idle"}`.
 
 ## Development
 

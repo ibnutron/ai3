@@ -6,14 +6,15 @@ import { createServer as createHttpsServer } from 'node:https';
 import { homedir, hostname } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
-import { ChatSession, type PromptOrigin } from '../session.js';
+import { ChatSession, TurnInterruptedError, type PromptOrigin } from '../session.js';
 import { SessionSync } from '../sessionSync.js';
 import { generateNonce, verifyChallenge } from '../auth.js';
 import { apiRequest, machineIdFor, readAuth, relayHostUrl, serverUrl, type StoredAuth } from '../config.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
-import { resolveSelection } from '../providers.js';
-import { SESSION_SELECTOR, type RelayFrame, type WireMessage } from '../protocol.js';
+import { listProviderModels, providerDef, resolveSelection } from '../providers.js';
+import { fetchModels } from '../models.js';
+import { SESSION_SELECTOR, type ImageInput, type ModelOption, type RelayFrame, type WireMessage } from '../protocol.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
 interface ServeOptions extends PermissionOptions {
@@ -48,6 +49,36 @@ const RATE_LIMIT_MAX_ATTEMPTS = 5;
 const CONFIRM_TIMEOUT_MS = 5 * 60_000;
 const RELAY_BACKOFF_MAX_MS = 30_000;
 const RELAY_SILENCE_TIMEOUT_MS = 75_000;
+const MAX_IMAGES = 4;
+/** Base64 characters across all images of one prompt; keeps a frame under the relay's 4 MB limit. */
+const MAX_IMAGE_CHARS = 3_500_000;
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/** Attached images if they are acceptable, [] for none, null when they are not. */
+function validImages(images: unknown): ImageInput[] | null {
+  if (images === undefined || images === null) {
+    return [];
+  }
+  if (!Array.isArray(images) || images.length > MAX_IMAGES) {
+    return null;
+  }
+  let total = 0;
+  for (const image of images as Partial<ImageInput>[]) {
+    if (!image || !IMAGE_TYPES.has(String(image.media_type)) || typeof image.data !== 'string') {
+      return null;
+    }
+    total += image.data.length;
+  }
+  return total <= MAX_IMAGE_CHARS ? (images as ImageInput[]) : null;
+}
+
+/** Models a client may switch to: the plan's list for aiolah (with names), the provider's live list otherwise. */
+async function listModelOptions(provider: string): Promise<ModelOption[]> {
+  if (providerDef(provider).kind === 'aiolah') {
+    return (await fetchModels()).data.map((model) => ({ id: model.id, name: model.name }));
+  }
+  return (await listProviderModels(provider)).map((id) => ({ id }));
+}
 
 /**
  * Two ways to be reachable:
@@ -158,6 +189,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       sessionUuid: runtime.sync ? await runtime.sync.ready : null,
       workspace: workspaceRoot,
       model: runtime.session.modelId,
+      provider: runtime.session.providerId,
       history: runtime.session.renderHistory(),
     });
     if (runtime.busy) {
@@ -184,28 +216,86 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       return runtime;
     }
 
+    if (message.type === 'list_models') {
+      const session = runtime.session;
+      try {
+        peer.send({
+          type: 'models',
+          provider: session.providerId,
+          current: session.modelId,
+          models: await listModelOptions(session.providerId),
+        });
+      } catch (error) {
+        peer.send({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      }
+      return runtime;
+    }
+
+    if (message.type === 'set_model') {
+      const model = String(message.model ?? '').trim();
+      if (runtime.busy) {
+        peer.send({ type: 'error', text: 'busy' });
+      } else if (!model || model.length > 200) {
+        peer.send({ type: 'error', text: 'invalid model' });
+      } else {
+        runtime.session.useModel(runtime.session.providerId, model);
+        stdout.write(`\n[session ${runtime.session.sessionId}] model → ${model}\n`);
+        broadcast(runtime, { type: 'model', provider: runtime.session.providerId, model });
+      }
+      return runtime;
+    }
+
+    if (message.type === 'interrupt') {
+      if (runtime.session.interrupt()) {
+        for (const settle of [...runtime.pendingConfirms.values()]) {
+          settle(false);
+        }
+      }
+      return runtime;
+    }
+
     if (message.type === 'user') {
       if (runtime.busy) {
         peer.send({ type: 'error', text: 'busy' });
         return runtime;
       }
-      stdout.write(`\nremote [${runtime.session.sessionId}]> ${message.text}\n`);
-      broadcast(runtime, { type: 'user', text: message.text }, peer);
-      void runTurn(runtime, message.text, 'remote');
+      const images = validImages(message.images);
+      if (images === null) {
+        peer.send({
+          type: 'error',
+          text: `Attach at most ${MAX_IMAGES} PNG, JPEG, GIF or WebP images under 3 MB each.`,
+        });
+        return runtime;
+      }
+      stdout.write(
+        `\nremote [${runtime.session.sessionId}]> ${message.text}${images.length ? ` [${images.length} image(s)]` : ''}\n`,
+      );
+      broadcast(runtime, { type: 'user', text: message.text, imageCount: images.length || undefined }, peer);
+      void runTurn(runtime, message.text, 'remote', images);
     }
     return runtime;
   }
 
-  async function runTurn(runtime: SessionRuntime, text: string, origin: PromptOrigin): Promise<void> {
+  async function runTurn(
+    runtime: SessionRuntime,
+    text: string,
+    origin: PromptOrigin,
+    images: ImageInput[] = [],
+  ): Promise<void> {
     runtime.busy = true;
     broadcast(runtime, { type: 'busy' });
     try {
-      const { reply } = await runtime.session.send(text, origin);
+      const { reply } = await runtime.session.send(text, origin, images);
       broadcast(runtime, { type: 'assistant', text: reply });
       if (runtime === main) {
         stdout.write(`\nassistant> ${reply}\n\n`);
       }
     } catch (error) {
+      if (error instanceof TurnInterruptedError) {
+        broadcast(runtime, { type: 'interrupted' });
+        stdout.write(`\n[interrupted ${runtime.session.sessionId}]\n\n`);
+        return;
+      }
       const text = error instanceof Error ? error.message : String(error);
       broadcast(runtime, { type: 'error', text });
       stdout.write(`\n[error ${runtime.session.sessionId}] ${text}\n\n`);

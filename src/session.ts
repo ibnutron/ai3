@@ -4,13 +4,23 @@ import { TOOL_SCHEMAS, executeTool, type ConfirmFn } from './tools/index.js';
 import { generateSessionId, loadSession, saveSession, type SessionRecord } from './persistence.js';
 import { createModelClient, type ModelClient } from './modelClient.js';
 import { packageVersion } from './version.js';
-import type { HistoryItem } from './protocol.js';
+import type { HistoryItem, ImageInput } from './protocol.js';
 
 type MessageParam = Anthropic.MessageParam;
 
 export interface ChatTurnResult {
   reply: string;
 }
+
+/** Thrown by `send` when the turn was stopped with `interrupt()`. */
+export class TurnInterruptedError extends Error {
+  constructor() {
+    super('Interrupted');
+    this.name = 'TurnInterruptedError';
+  }
+}
+
+const INTERRUPTED_TOOL_RESULT = 'Interrupted by the user before this ran.';
 
 /**
  * Where a prompt came from, sent to aiolah (which logs every prompt it
@@ -50,6 +60,7 @@ export class ChatSession extends EventEmitter {
   private readonly id: string;
   private readonly createdAt: string;
   private history: MessageParam[];
+  private abortController: AbortController | null = null;
 
   constructor(options: ChatSessionOptions) {
     super();
@@ -99,6 +110,20 @@ export class ChatSession extends EventEmitter {
     return this.workspaceRoot;
   }
 
+  /** True while a turn is running. */
+  get isRunning(): boolean {
+    return this.abortController !== null;
+  }
+
+  /** Stops the running turn (model call, pending shell command); `send` then throws TurnInterruptedError. */
+  interrupt(): boolean {
+    if (!this.abortController) {
+      return false;
+    }
+    this.abortController.abort();
+    return true;
+  }
+
   /** Conversation flattened to what a client renders (tool_use/tool_result pairs joined by id). */
   renderHistory(): HistoryItem[] {
     const items: HistoryItem[] = [];
@@ -110,9 +135,16 @@ export class ChatSession extends EventEmitter {
         continue;
       }
 
+      const images = message.content.filter((block) => block.type === 'image').length;
+      let imagesShown = false;
       for (const block of message.content) {
         if (block.type === 'text' && block.text.trim()) {
-          items.push({ role: message.role, text: block.text });
+          if (message.role === 'user' && images && !imagesShown) {
+            items.push({ role: 'user', text: block.text, images });
+            imagesShown = true;
+          } else {
+            items.push({ role: message.role, text: block.text });
+          }
         } else if (block.type === 'tool_use') {
           pendingTools.set(block.id, { name: block.name, input: block.input });
         } else if (block.type === 'tool_result') {
@@ -130,20 +162,77 @@ export class ChatSession extends EventEmitter {
     return items;
   }
 
-  async send(userMessage: string, origin: PromptOrigin = 'terminal'): Promise<ChatTurnResult> {
-    this.emit('turn_start', { text: userMessage, origin });
+  async send(
+    userMessage: string,
+    origin: PromptOrigin = 'terminal',
+    images: ImageInput[] = [],
+  ): Promise<ChatTurnResult> {
+    if (this.abortController) {
+      throw new Error('A turn is already running.');
+    }
+    const controller = new AbortController();
+    this.abortController = controller;
+    this.emit('turn_start', { text: userMessage, origin, images: images.length });
     try {
-      const result = await this.runTurn(userMessage, origin);
+      const result = await this.runTurn(userMessage, origin, images, controller.signal);
       this.emit('turn_end', { reply: result.reply });
       return result;
     } catch (error) {
+      if (controller.signal.aborted) {
+        this.closeInterruptedTurn();
+        this.emit('turn_error', { message: 'Interrupted' });
+        throw new TurnInterruptedError();
+      }
       this.emit('turn_error', { message: error instanceof Error ? error.message : String(error) });
       throw error;
+    } finally {
+      this.abortController = null;
     }
   }
 
-  private async runTurn(userMessage: string, origin: PromptOrigin): Promise<ChatTurnResult> {
-    this.history.push({ role: 'user', content: userMessage });
+  /**
+   * Leaves the history valid for the next request after an interrupt: every
+   * tool_use gets a tool_result, and the turn ends with an assistant message.
+   */
+  private closeInterruptedTurn(): void {
+    const last = this.history[this.history.length - 1];
+    if (last?.role === 'assistant' && Array.isArray(last.content)) {
+      const pending = last.content.filter((block): block is Anthropic.ToolUseBlockParam => block.type === 'tool_use');
+      if (pending.length) {
+        this.history.push({
+          role: 'user',
+          content: pending.map((block) => ({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: INTERRUPTED_TOOL_RESULT,
+          })),
+        });
+      }
+    }
+    if (this.history[this.history.length - 1]?.role !== 'assistant') {
+      this.history.push({ role: 'assistant', content: '(interrupted)' });
+    }
+    this.persist();
+  }
+
+  private async runTurn(
+    userMessage: string,
+    origin: PromptOrigin,
+    images: ImageInput[],
+    signal: AbortSignal,
+  ): Promise<ChatTurnResult> {
+    this.history.push({
+      role: 'user',
+      content: images.length
+        ? [
+            ...images.map((image) => ({
+              type: 'image' as const,
+              source: { type: 'base64' as const, media_type: image.media_type, data: image.data },
+            })),
+            { type: 'text' as const, text: userMessage },
+          ]
+        : userMessage,
+    });
 
     // Context for aiolah's prompt log; never sent to Anthropic directly.
     const headers = this.client.viaAiolah
@@ -164,7 +253,9 @@ export class ChatSession extends EventEmitter {
           messages: this.history,
         },
         headers,
+        signal,
       );
+      signal.throwIfAborted();
 
       this.history.push({ role: 'assistant', content: response.content });
       this.persist();
@@ -182,15 +273,23 @@ export class ChatSession extends EventEmitter {
         if (block.type !== 'tool_use') {
           continue;
         }
+        if (signal.aborted) {
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: INTERRUPTED_TOOL_RESULT });
+          continue;
+        }
         this.emit('tool', { name: block.name, input: block.input });
         let content: string;
         try {
           content = await executeTool(block.name, block.input as Record<string, unknown>, {
             workspaceRoot: this.workspaceRoot,
             confirm: this.confirm,
+            signal,
           });
         } catch (error) {
           content = `Error: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        if (signal.aborted) {
+          content = `${content}\n(interrupted by the user)`;
         }
         this.emit('tool_result', { name: block.name, result: content });
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
@@ -198,6 +297,7 @@ export class ChatSession extends EventEmitter {
 
       this.history.push({ role: 'user', content: toolResults });
       this.persist();
+      signal.throwIfAborted();
     }
   }
 

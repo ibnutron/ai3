@@ -5,9 +5,7 @@ export class WorkspaceViolationError extends Error {}
 
 /** Resolves `targetPath` against `workspaceRoot`, refusing anything that escapes it. */
 export function resolveInWorkspace(workspaceRoot: string, targetPath: string): string {
-  const resolved = isAbsolute(targetPath)
-    ? resolve(targetPath)
-    : resolve(workspaceRoot, targetPath);
+  const resolved = isAbsolute(targetPath) ? resolve(targetPath) : resolve(workspaceRoot, targetPath);
   const rel = relative(workspaceRoot, resolved);
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new WorkspaceViolationError(`Path "${targetPath}" is outside the workspace`);
@@ -25,12 +23,7 @@ export function writeFile(workspaceRoot: string, path: string, content: string):
   writeFileSync(absolute, content, 'utf8');
 }
 
-export function editFile(
-  workspaceRoot: string,
-  path: string,
-  oldString: string,
-  newString: string,
-): void {
+export function editFile(workspaceRoot: string, path: string, oldString: string, newString: string): void {
   const absolute = resolveInWorkspace(workspaceRoot, path);
   const content = readFileSync(absolute, 'utf8');
   const occurrences = content.split(oldString).length - 1;

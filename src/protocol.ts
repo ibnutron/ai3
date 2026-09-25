@@ -1,5 +1,16 @@
+/** An image attached to a prompt (base64, no data: prefix). */
+export interface ImageInput {
+  media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  data: string;
+}
+
+export interface ModelOption {
+  id: string;
+  name?: string;
+}
+
 export type HistoryItem =
-  | { role: 'user'; text: string }
+  | { role: 'user'; text: string; images?: number }
   | { role: 'assistant'; text: string }
   | { role: 'tool'; name: string; input: unknown; result: string };
 
@@ -13,12 +24,24 @@ export type WireMessage =
       sessionUuid?: string | null;
       workspace: string;
       model: string;
+      /** Provider id the session uses (`aiolah`, `openrouter`, …). */
+      provider?: string;
       history: HistoryItem[];
     }
   /** Direct mode: switch this connection to another session (`new` starts one). */
   | { type: 'open_session'; session: string }
-  | { type: 'user'; text: string }
+  /** Client → host: `images` (optional) are attached; host → clients: only `imageCount`. */
+  | { type: 'user'; text: string; images?: ImageInput[]; imageCount?: number }
   | { type: 'assistant'; text: string }
+  /** Client → host: models the session's provider offers; answered with `models`. */
+  | { type: 'list_models' }
+  | { type: 'models'; provider: string; current: string; models: ModelOption[] }
+  /** Client → host: switch this session's model (only while idle); broadcast as `model`. */
+  | { type: 'set_model'; model: string }
+  | { type: 'model'; provider: string; model: string }
+  /** Client → host: stop the running turn; clients then get `interrupted` and `idle`. */
+  | { type: 'interrupt' }
+  | { type: 'interrupted' }
   | { type: 'tool'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; result: string }
   | { type: 'confirm'; id: string; description: string }

@@ -64,11 +64,15 @@ export class SessionSync {
   }
 
   private listen(): void {
-    this.session.on('turn_start', ({ text, origin }: { text: string; origin: PromptOrigin }) => {
-      this.turnHasChanges = false;
-      this.push({ type: 'status', state: 'working' });
-      this.push({ type: 'message', role: 'user', text, origin });
-    });
+    this.session.on(
+      'turn_start',
+      ({ text, origin, images }: { text: string; origin: PromptOrigin; images?: number }) => {
+        this.turnHasChanges = false;
+        this.push({ type: 'status', state: 'working' });
+        const attached = images ? `\n\n[${images} image${images === 1 ? '' : 's'} attached]` : '';
+        this.push({ type: 'message', role: 'user', text: `${text}${attached}`, origin });
+      },
+    );
     this.session.on('tool', ({ name, input }: { name: string; input: unknown }) => {
       this.push({ type: 'tool', name, input });
     });
