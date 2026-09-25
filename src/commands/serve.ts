@@ -210,7 +210,7 @@ interface DirectHooks {
 
 /** Direct mode: listen on --port, clients answer an HMAC challenge with AIOLAH_REMOTE_TOKEN. */
 function startDirect(options: ServeOptions, hooks: DirectHooks): string {
-  const token = process.env.AIOLAH_REMOTE_TOKEN ?? randomBytes(16).toString('hex');
+  const token = process.env.AIOLAH_REMOTE_TOKEN || randomBytes(16).toString('hex');
   const port = Number(options.port);
   const attemptsByIp = new Map<string, number[]>();
 

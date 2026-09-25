@@ -39,12 +39,12 @@ export function clearAuth(): void {
 
 /** `AIOLAH_SERVER` wins, then the server the user logged in to, then aiolah.com. */
 export function serverUrl(auth: StoredAuth | null = readAuth()): string {
-  return (process.env.AIOLAH_SERVER ?? auth?.server ?? DEFAULT_SERVER).replace(/\/+$/, '');
+  return (process.env.AIOLAH_SERVER || auth?.server || DEFAULT_SERVER).replace(/\/+$/, '');
 }
 
 /** Relay endpoint a logged-in `aiolah serve` dials out to. */
 export function relayHostUrl(server: string): string {
-  const base = process.env.AIOLAH_RELAY_URL ?? `${server.replace(/^http/i, 'ws')}/cli-relay`;
+  const base = process.env.AIOLAH_RELAY_URL || `${server.replace(/^http/i, 'ws')}/cli-relay`;
   return `${base.replace(/\/+$/, '')}/host`;
 }
 

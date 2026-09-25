@@ -9,7 +9,7 @@ const RESULT_PREVIEW_CHARS = 300;
 
 export async function attachCommand(address: string): Promise<void> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
-  const token = process.env.AIOLAH_REMOTE_TOKEN ?? (await rl.question('Remote token: '));
+  const token = process.env.AIOLAH_REMOTE_TOKEN || (await rl.question('Remote token: '));
 
   const socket = new WebSocket(address);
   const pendingConfirms: string[] = [];

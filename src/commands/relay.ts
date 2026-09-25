@@ -39,7 +39,7 @@ export async function relayCommand(options: RelayOptions): Promise<void> {
   if (!secret) {
     throw new Error('CLI_RELAY_SECRET is not set (must match the Laravel app).');
   }
-  const api = (options.api ?? process.env.AIOLAH_SERVER ?? DEFAULT_SERVER).replace(/\/+$/, '');
+  const api = (options.api || process.env.AIOLAH_SERVER || DEFAULT_SERVER).replace(/\/+$/, '');
   const port = Number(options.port);
 
   const hosts = new Map<number, HostEntry>();
