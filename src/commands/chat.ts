@@ -4,9 +4,10 @@ import { resolve } from 'node:path';
 import { ChatSession } from '../session.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
+import { resolveModel } from '../models.js';
 
 interface ChatOptions {
-  model: string;
+  model?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
@@ -26,14 +27,14 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
         return answer?.trim().toLowerCase() === 'y';
       };
 
-  const session = new ChatSession({ model: options.model, workspaceRoot, confirm, resumeId });
+  const session = new ChatSession({ model: await resolveModel(options.model), workspaceRoot, confirm, resumeId });
 
   session.on('tool', ({ name, input }) => {
     stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
   });
 
   stdout.write(
-    `aiolah chat — model ${options.model}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
+    `aiolah chat — model ${session.modelId}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
       `Type "exit" to quit.\n`,
   );
 
@@ -47,8 +48,12 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
         continue;
       }
 
-      const { reply } = await session.send(input);
-      stdout.write(`\nassistant> ${reply}\n\n`);
+      try {
+        const { reply } = await session.send(input);
+        stdout.write(`\nassistant> ${reply}\n\n`);
+      } catch (error) {
+        stdout.write(`\n[error] ${error instanceof Error ? error.message : String(error)}\n\n`);
+      }
     }
   } finally {
     rl.close();

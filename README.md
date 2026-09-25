@@ -18,7 +18,9 @@ Which credentials are used for model calls:
    straight to Anthropic on your own key.
 2. Otherwise the token from `aiolah auth login` (`~/.aiolah/auth.json`, mode
    0600) — model calls go through `https://aiolah.com/api/cli/anthropic` and are
-   billed to your aiolah plan.
+   billed to your aiolah plan. Any coding model your plan allows can be used
+   (Claude, GPT, Gemini, Qwen, … whatever aiolah has enabled); `aiolah models`
+   lists them live and `--model <id>` picks one (default: your plan's default).
 
 From source: `npm install && npm run build && npm link`. The `.env` next to the
 package is loaded automatically on every invocation (regardless of the current
@@ -33,6 +35,8 @@ directory); variables already exported in the environment take precedence.
   `--no-browser` only prints the URL.
 - `aiolah remote-control [name]` / `aiolah rc [name]` — registers this folder as a device and dials out to the aiolah
   relay. No open port, certificate or token; the device appears on /code.
+- `aiolah models` — list the coding models your aiolah plan can use (live from
+  the server, so newly enabled models appear without updating the CLI).
 - `aiolah chat` — interactive chat with tool-use (file read/write/edit, `run_bash`)
   scoped to `--workspace` (default: current directory).
 - `aiolah serve` — same as `rc` when logged in and no `--port` is given. With

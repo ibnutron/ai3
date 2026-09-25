@@ -11,12 +11,13 @@ import { generateNonce, verifyChallenge } from '../auth.js';
 import { apiRequest, machineIdFor, readAuth, relayHostUrl, serverUrl, type StoredAuth } from '../config.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
+import { resolveModel } from '../models.js';
 import type { RelayFrame, WireMessage } from '../protocol.js';
 
 interface ServeOptions {
   port?: string;
   name?: string;
-  model: string;
+  model?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
@@ -83,7 +84,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
           stdout.write(`\n[confirm] Allow ${description}? Type y or n here, or answer from a client.\n`);
         });
 
-  const session = new ChatSession({ model: options.model, workspaceRoot, confirm, resumeId });
+  const session = new ChatSession({ model: await resolveModel(options.model), workspaceRoot, confirm, resumeId });
 
   session.on('tool', ({ name, input }) => {
     stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);

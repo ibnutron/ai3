@@ -10,6 +10,7 @@ import { attachCommand } from './commands/attach.js';
 import { sessionsListCommand } from './commands/sessions.js';
 import { loginCommand, logoutCommand, statusCommand } from './commands/login.js';
 import { relayCommand } from './commands/relay.js';
+import { modelsCommand } from './commands/models.js';
 
 loadPackageEnv();
 
@@ -39,7 +40,7 @@ program.command('logout').description('Shortcut for "aiolah auth logout"').actio
 program
   .command('chat')
   .description('Start an interactive chat session in this terminal')
-  .option('-m, --model <model>', 'Anthropic model id', 'claude-sonnet-5')
+  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
   .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
   .option('--resume <id>', 'resume a saved session by id')
   .option('--continue', 'resume the most recently updated session')
@@ -54,7 +55,7 @@ program
   )
   .option('-p, --port <port>', 'direct mode: listen on this port instead of connecting to the aiolah relay')
   .option('-n, --name <name>', 'relay mode: device name shown on /code')
-  .option('-m, --model <model>', 'Anthropic model id', 'claude-sonnet-5')
+  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
   .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
   .option('--resume <id>', 'resume a saved session by id')
   .option('--continue', 'resume the most recently updated session')
@@ -71,7 +72,7 @@ program
   .description('Control this folder from aiolah /code, the app or VS Code (needs "aiolah auth login")')
   .argument('[name]', 'device name shown on /code (default: "<hostname> · <folder>")')
   .option('-n, --name <name>', 'device name shown on /code')
-  .option('-m, --model <model>', 'Anthropic model id', 'claude-sonnet-5')
+  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
   .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
   .option('--resume <id>', 'resume a saved session by id')
   .option('--continue', 'resume the most recently updated session')
@@ -84,6 +85,11 @@ program
   .command('attach <address>')
   .description('Attach to a running "aiolah serve" session, e.g. aiolah attach ws://host:4317')
   .action(attachCommand);
+
+program
+  .command('models')
+  .description('List the coding models available to your aiolah account')
+  .action(modelsCommand);
 
 program
   .command('relay')
