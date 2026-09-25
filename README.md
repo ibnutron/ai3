@@ -37,8 +37,16 @@ directory); variables already exported in the environment take precedence.
   relay. No open port, certificate or token; the device appears on /code.
 - `aiolah models` — list the coding models your aiolah plan can use (live from
   the server, so newly enabled models appear without updating the CLI).
-- `aiolah chat` — interactive chat with tool-use (file read/write/edit, `run_bash`)
-  scoped to `--workspace` (default: current directory).
+- `aiolah` / `aiolah chat` — interactive chat with tool-use (file read/write/edit,
+  `run_bash`) scoped to `--workspace` (default: current directory).
+- `aiolah run "<prompt>"` / `aiolah -p "<prompt>"` — non-interactive: one prompt
+  in, the final answer out (`--output-format text|json`). Piped stdin is appended
+  to the prompt (`cat log.txt | aiolah -p "explain this error"`). Nobody can
+  confirm here, so changes are denied unless the permission mode allows them.
+- `aiolah doctor` — check the install, credentials, server, login, models and
+  relay; exits 1 when a required check fails.
+- `aiolah upgrade [version]` (alias `update`) — update the npm install to the
+  latest or a given version; `--check` only reports.
 - `aiolah serve` — same as `rc` when logged in and no `--port` is given. With
   `--port` it runs in **direct mode**: listens for WebSocket clients that
   authenticate with `AIOLAH_REMOTE_TOKEN` (LAN / self-hosted / no account).
@@ -54,11 +62,15 @@ directory); variables already exported in the environment take precedence.
 
 - `-w, --workspace <dir>` — root directory tools are scoped to (default `.`).
   File paths that resolve outside this directory are rejected.
-- `--resume <id>` / `--continue` — resume a specific saved session, or the most
-  recently updated one. Full history (including tool calls) is persisted to
+- `-m, --model <id>` — model to use (see `aiolah models`).
+- `-r, --resume <id>` / `-c, --continue` — resume a specific saved session, or the
+  most recently updated one. Full history (including tool calls) is persisted to
   `~/.aiolah/sessions/<id>.json` after every turn.
-- `--yolo` — skip the y/n confirmation prompt before `write_file`, `edit_file`,
-  or `run_bash`. Off by default: those three tools always ask first.
+- `--permission-mode <mode>` — when to ask before mutating tools:
+  `default` (ask before `write_file`, `edit_file`, `run_bash`), `acceptEdits`
+  (file edits allowed, shell commands still ask), `bypassPermissions` (never
+  ask). `--dangerously-skip-permissions` is the same as `bypassPermissions`
+  (the old `--yolo` still works as a hidden alias).
 - `-n, --name <name>` (serve/rc) — device name on /code (default
   `<hostname> · <folder>`).
 - `--cert <path> --key <path>` (direct-mode serve only) — serve over `wss://` (TLS) using a
@@ -104,7 +116,8 @@ aiolah rc ──outbound wss──▶ aiolah relay ◀──wss + one-time ticke
    `{type:"tool_result", name, result}`, then `{type:"assistant", text}` and
    `{type:"idle"}`. A `user` message sent while busy gets `error: "busy"`.
    Other connected clients receive the same `user` message so they stay in sync.
-4. Unless the host runs with `--yolo`, mutating tools (`write_file`,
+4. Unless the host runs with `--dangerously-skip-permissions` (or a permission
+   mode that allows them), mutating tools (`write_file`,
    `edit_file`, `run_bash`) pause with `{type:"confirm", id, description}` sent
    to every client and printed on the host terminal. The first answer wins —
    a client replies `{type:"confirm_reply", id, allow:true|false}`, or the host
@@ -144,11 +157,11 @@ exposing it past `localhost`, treat the following as required, not optional:
    Don't open the port on a public IP; put it behind a VPN (Tailscale/WireGuard),
    an SSH tunnel (`ssh -L 4317:localhost:4317 host`), or a reverse proxy with
    its own auth.
-4. **Never run with `--yolo` on a machine you care about.** Without it, every
+4. **Never run with `--dangerously-skip-permissions` on a machine you care about.** Without it, every
    `write_file` / `edit_file` / `run_bash` waits for a y/N on the *host*
    terminal — which means an unattended service (stdin closed) will hang on
    the first mutating tool call. For an unattended host, either accept
-   `--yolo` inside a sandboxed workspace/VM, or keep a terminal attached
+   `--dangerously-skip-permissions` inside a sandboxed workspace/VM, or keep a terminal attached
    (tmux/screen) to approve calls.
 5. **Scope the workspace** with `-w` to the single repo the session should
    touch; `run_bash` still executes with the host user's full privileges inside

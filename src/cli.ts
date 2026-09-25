@@ -11,12 +11,20 @@ import { sessionsListCommand } from './commands/sessions.js';
 import { loginCommand, logoutCommand, statusCommand } from './commands/login.js';
 import { relayCommand } from './commands/relay.js';
 import { modelsCommand } from './commands/models.js';
+import { runCommand } from './commands/run.js';
+import { upgradeCommand } from './commands/upgrade.js';
+import { doctorCommand } from './commands/doctor.js';
+import { packageVersion } from './version.js';
+import { addPermissionOptions } from './permissions.js';
 
 loadPackageEnv();
 
 const program = new Command();
 
-program.name('aiolah').description('Terminal AI CLI with remote control support').version('0.2.0');
+program
+  .name('aiolah')
+  .description('Terminal AI coding agent with remote control, powered by aiolah')
+  .version(packageVersion(), '-v, --version');
 
 // `aiolah auth login|logout|status` — device-code sign-in to aiolah.
 const auth = program.command('auth').description('Manage your aiolah login');
@@ -26,7 +34,7 @@ auth
   .option('--server <url>', 'aiolah server URL (default https://aiolah.com or $AIOLAH_SERVER)')
   .option('--no-browser', 'only print the URL, do not try to open a browser')
   .action(loginCommand);
-auth.command('logout').description('Sign out and revoke this machine\'s token').action(logoutCommand);
+auth.command('logout').description("Sign out and revoke this machine's token").action(logoutCommand);
 auth.command('status').alias('list').description('Show which account and credentials are in use').action(statusCommand);
 
 program
@@ -37,59 +45,70 @@ program
   .action(loginCommand);
 program.command('logout').description('Shortcut for "aiolah auth logout"').action(logoutCommand);
 
-program
-  .command('chat')
-  .description('Start an interactive chat session in this terminal')
-  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
-  .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
-  .option('--resume <id>', 'resume a saved session by id')
-  .option('--continue', 'resume the most recently updated session')
-  .option('--yolo', 'skip confirmation prompts for write_file/edit_file/run_bash')
-  .action(chatCommand);
+addPermissionOptions(
+  program
+    .command('chat')
+    .description('Start an interactive chat session in this terminal')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
+    .option('-r, --resume <id>', 'resume a saved session by id')
+    .option('-c, --continue', 'resume the most recently updated session'),
+).action(chatCommand);
 
-program
-  .command('serve')
-  .description(
-    'Let this machine be controlled remotely: via aiolah (/code, app, VS Code) after "aiolah auth login", ' +
-      'or directly with --port and AIOLAH_REMOTE_TOKEN',
-  )
-  .option('-p, --port <port>', 'direct mode: listen on this port instead of connecting to the aiolah relay')
-  .option('-n, --name <name>', 'relay mode: device name shown on /code')
-  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
-  .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
-  .option('--resume <id>', 'resume a saved session by id')
-  .option('--continue', 'resume the most recently updated session')
-  .option('--yolo', 'skip confirmation prompts for write_file/edit_file/run_bash')
-  .option('--cert <path>', 'TLS certificate path (enables wss)')
-  .option('--key <path>', 'TLS private key path (enables wss)')
-  .action(serveCommand);
+addPermissionOptions(
+  program
+    .command('serve')
+    .description(
+      'Let this machine be controlled remotely: via aiolah (/code, app, VS Code) after "aiolah auth login", ' +
+        'or directly with --port and AIOLAH_REMOTE_TOKEN',
+    )
+    .option('-p, --port <port>', 'direct mode: listen on this port instead of connecting to the aiolah relay')
+    .option('-n, --name <name>', 'relay mode: device name shown on /code')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
+    .option('-r, --resume <id>', 'resume a saved session by id')
+    .option('-c, --continue', 'resume the most recently updated session')
+    .option('--cert <path>', 'TLS certificate path (enables wss)')
+    .option('--key <path>', 'TLS private key path (enables wss)'),
+).action(serveCommand);
 
 // `aiolah remote-control` / `aiolah rc`: serve this folder through the
 // aiolah relay only (never opens a port), under an optional device name.
-program
-  .command('remote-control')
-  .alias('rc')
-  .description('Control this folder from aiolah /code, the app or VS Code (needs "aiolah auth login")')
-  .argument('[name]', 'device name shown on /code (default: "<hostname> · <folder>")')
-  .option('-n, --name <name>', 'device name shown on /code')
-  .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
-  .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
-  .option('--resume <id>', 'resume a saved session by id')
-  .option('--continue', 'resume the most recently updated session')
-  .option('--yolo', 'skip confirmation prompts for write_file/edit_file/run_bash')
-  .action((name: string | undefined, options: Parameters<typeof serveCommand>[0]) =>
-    serveCommand({ ...options, name: options.name ?? name, port: undefined }),
-  );
+addPermissionOptions(
+  program
+    .command('remote-control')
+    .alias('rc')
+    .description('Control this folder from aiolah /code, the app or VS Code (needs "aiolah auth login")')
+    .argument('[name]', 'device name shown on /code (default: "<hostname> · <folder>")')
+    .option('-n, --name <name>', 'device name shown on /code')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
+    .option('-r, --resume <id>', 'resume a saved session by id')
+    .option('-c, --continue', 'resume the most recently updated session'),
+).action((name: string | undefined, options: Parameters<typeof serveCommand>[0]) =>
+  serveCommand({ ...options, name: options.name ?? name, port: undefined }),
+);
+
+addPermissionOptions(
+  program
+    .command('run')
+    .description(
+      'Run one prompt non-interactively and print the answer (also: aiolah -p "<prompt>"); piped stdin is appended',
+    )
+    .argument('[prompt...]', 'the prompt')
+    .option('-m, --model <model>', 'model id (see "aiolah models"; default: your plan\'s default)')
+    .option('-w, --workspace <dir>', 'workspace root for file/bash tools', '.')
+    .option('-r, --resume <id>', 'continue a saved session by id')
+    .option('-c, --continue', 'continue the most recently updated session')
+    .option('--output-format <format>', 'text or json', 'text'),
+).action(runCommand);
 
 program
   .command('attach <address>')
   .description('Attach to a running "aiolah serve" session, e.g. aiolah attach ws://host:4317')
   .action(attachCommand);
 
-program
-  .command('models')
-  .description('List the coding models available to your aiolah account')
-  .action(modelsCommand);
+program.command('models').description('List the coding models available to your aiolah account').action(modelsCommand);
 
 program
   .command('relay')
@@ -98,10 +117,20 @@ program
   .option('--api <url>', 'aiolah Laravel base URL used to verify hosts (default $AIOLAH_SERVER)')
   .action(relayCommand);
 
+program
+  .command('upgrade')
+  .alias('update')
+  .description('Update aiolah to the latest (or a given) version from npm')
+  .argument('[version]', 'version to install (default: latest)')
+  .option('--check', 'only check whether an update is available')
+  .action(upgradeCommand);
+
+program.command('doctor').description('Check installation, login and connectivity to aiolah').action(doctorCommand);
+
 const sessions = program.command('sessions').description('Manage saved chat sessions');
 sessions.command('list').description('List saved sessions').action(sessionsListCommand);
 
-program.parseAsync().catch((error: unknown) => {
+program.parseAsync(normalizeArgv(process.argv)).catch((error: unknown) => {
   process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 });
@@ -122,4 +151,23 @@ function loadPackageEnv(): void {
   for (const [key, value] of Object.entries(parseEnv(contents))) {
     process.env[key] ??= value;
   }
+}
+
+/**
+ * Shortcuts that don't fit commander's subcommand model:
+ * - `aiolah` with no arguments starts `aiolah chat`;
+ * - `aiolah -p "<prompt>"` / `aiolah --print "<prompt>"` is `aiolah run "<prompt>"`.
+ */
+function normalizeArgv(argv: string[]): string[] {
+  const [node = 'node', script = 'aiolah', first, ...rest] = argv;
+  if (first === undefined) {
+    return [node, script, 'chat'];
+  }
+  if (first === '-p' || first === '--print') {
+    return [node, script, 'run', ...rest];
+  }
+  if (first.startsWith('--print=')) {
+    return [node, script, 'run', first.slice('--print='.length), ...rest];
+  }
+  return argv;
 }

@@ -2,7 +2,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { editFile, listDir, readFile, writeFile } from './fileTools.js';
 import { runBash } from './bashTool.js';
 
-export type ConfirmFn = (description: string) => Promise<boolean>;
+/** Asks whether a mutating tool may run; `tool` is the tool name (write_file, edit_file, run_bash). */
+export type ConfirmFn = (description: string, tool: string) => Promise<boolean>;
 
 export const TOOL_SCHEMAS: Anthropic.Tool[] = [
   {
@@ -81,7 +82,7 @@ export async function executeTool(
 
     case 'write_file': {
       const path = String(input.path);
-      if (!(await confirm(`write_file: ${path}`))) {
+      if (!(await confirm(`write_file: ${path}`, 'write_file'))) {
         return 'User declined this action.';
       }
       writeFile(workspaceRoot, path, String(input.content));
@@ -90,7 +91,7 @@ export async function executeTool(
 
     case 'edit_file': {
       const path = String(input.path);
-      if (!(await confirm(`edit_file: ${path}`))) {
+      if (!(await confirm(`edit_file: ${path}`, 'edit_file'))) {
         return 'User declined this action.';
       }
       editFile(workspaceRoot, path, String(input.old_string), String(input.new_string));
@@ -99,7 +100,7 @@ export async function executeTool(
 
     case 'run_bash': {
       const command = String(input.command);
-      if (!(await confirm(`run_bash: ${command}`))) {
+      if (!(await confirm(`run_bash: ${command}`, 'run_bash'))) {
         return 'User declined this action.';
       }
       const result = await runBash(workspaceRoot, command);

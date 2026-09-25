@@ -5,13 +5,13 @@ import { ChatSession } from '../session.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
 import { resolveModel } from '../models.js';
+import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
-interface ChatOptions {
+interface ChatOptions extends PermissionOptions {
   model?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
-  yolo?: boolean;
 }
 
 export async function chatCommand(options: ChatOptions): Promise<void> {
@@ -20,12 +20,10 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
 
   const resumeId = options.resume ?? (options.continue ? findLatestSession()?.id : undefined);
 
-  const confirm = options.yolo
-    ? async () => true
-    : async (description: string) => {
-        const answer = await ask(rl, `Allow ${description}? [y/N] `);
-        return answer?.trim().toLowerCase() === 'y';
-      };
+  const confirm = applyPermissionMode(resolvePermissionMode(options), async (description) => {
+    const answer = await ask(rl, `Allow ${description}? [y/N] `);
+    return answer?.trim().toLowerCase() === 'y';
+  });
 
   const session = new ChatSession({ model: await resolveModel(options.model), workspaceRoot, confirm, resumeId });
 

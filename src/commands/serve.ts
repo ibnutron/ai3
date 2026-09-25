@@ -13,15 +13,15 @@ import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
 import { resolveModel } from '../models.js';
 import type { RelayFrame, WireMessage } from '../protocol.js';
+import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
-interface ServeOptions {
+interface ServeOptions extends PermissionOptions {
   port?: string;
   name?: string;
   model?: string;
   workspace: string;
   resume?: string;
   continue?: boolean;
-  yolo?: boolean;
   cert?: string;
   key?: string;
 }
@@ -65,26 +65,32 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
   // Confirmation is answered by whoever responds first: an attached client
   // (`confirm_reply`) or the host operator typing y/n at the main prompt.
   // A single readline prompt is kept so we never stack two `question()`s.
-  const confirm = options.yolo
-    ? async () => true
-    : (description: string) =>
-        new Promise<boolean>((resolveConfirm) => {
-          const id = randomBytes(6).toString('hex');
-          const timer = setTimeout(() => settle(false), CONFIRM_TIMEOUT_MS);
-          const settle = (allow: boolean) => {
-            if (!pendingConfirms.has(id)) {
-              return;
-            }
-            clearTimeout(timer);
-            pendingConfirms.delete(id);
-            resolveConfirm(allow);
-          };
-          pendingConfirms.set(id, settle);
-          broadcast({ type: 'confirm', id, description });
-          stdout.write(`\n[confirm] Allow ${description}? Type y or n here, or answer from a client.\n`);
-        });
+  const confirm = applyPermissionMode(
+    resolvePermissionMode(options),
+    (description: string) =>
+      new Promise<boolean>((resolveConfirm) => {
+        const id = randomBytes(6).toString('hex');
+        const timer = setTimeout(() => settle(false), CONFIRM_TIMEOUT_MS);
+        const settle = (allow: boolean) => {
+          if (!pendingConfirms.has(id)) {
+            return;
+          }
+          clearTimeout(timer);
+          pendingConfirms.delete(id);
+          resolveConfirm(allow);
+        };
+        pendingConfirms.set(id, settle);
+        broadcast({ type: 'confirm', id, description });
+        stdout.write(`\n[confirm] Allow ${description}? Type y or n here, or answer from a client.\n`);
+      }),
+  );
 
-  const session = new ChatSession({ model: await resolveModel(options.model), workspaceRoot, confirm, resumeId });
+  const session = new ChatSession({
+    model: await resolveModel(options.model),
+    workspaceRoot,
+    confirm,
+    resumeId,
+  });
 
   session.on('tool', ({ name, input }) => {
     stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
@@ -153,8 +159,16 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
 
   const banner =
     options.port === undefined
-      ? await startRelay(auth as StoredAuth, workspaceRoot, options.name, { peers, addPeer, handlePeerMessage })
-      : startDirect(options, { addPeer, handlePeerMessage, removePeer: (peer) => peers.delete(peer) });
+      ? await startRelay(auth as StoredAuth, workspaceRoot, options.name, {
+          peers,
+          addPeer,
+          handlePeerMessage,
+        })
+      : startDirect(options, {
+          addPeer,
+          handlePeerMessage,
+          removePeer: (peer) => peers.delete(peer),
+        });
 
   stdout.write(
     `aiolah serve — ${banner}\nworkspace ${workspaceRoot}, session ${session.sessionId}\n` +
@@ -200,14 +214,15 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
   const port = Number(options.port);
   const attemptsByIp = new Map<string, number[]>();
 
-  const wss = options.cert && options.key
-    ? new WebSocketServer({
-        server: createHttpsServer({
-          cert: readFileSync(options.cert),
-          key: readFileSync(options.key),
-        }).listen(port),
-      })
-    : new WebSocketServer({ port });
+  const wss =
+    options.cert && options.key
+      ? new WebSocketServer({
+          server: createHttpsServer({
+            cert: readFileSync(options.cert),
+            key: readFileSync(options.key),
+          }).listen(port),
+        })
+      : new WebSocketServer({ port });
 
   wss.on('connection', (socket, request) => {
     const ip = request.socket.remoteAddress ?? 'unknown';
@@ -302,7 +317,11 @@ async function startRelay(
   const registration = await apiRequest<{ host_id?: number }>(server, '/api/v1/app/cli/hosts', {
     method: 'POST',
     token: auth.token,
-    body: { machine_id: machineIdFor(workspaceRoot), name, workspace: workspaceRoot },
+    body: {
+      machine_id: machineIdFor(workspaceRoot),
+      name,
+      workspace: workspaceRoot,
+    },
   });
   if (registration.status === 401 || registration.status === 403) {
     throw new Error('Your aiolah login is no longer valid. Run `aiolah auth login` again.');
@@ -317,7 +336,10 @@ async function startRelay(
 
   const connect = (): void => {
     const socket = new WebSocket(relayHostUrl(server), {
-      headers: { Authorization: `Bearer ${auth.token}`, 'X-Host-Id': String(hostId) },
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+        'X-Host-Id': String(hostId),
+      },
     });
     let silenceTimer: NodeJS.Timeout | undefined;
     const resetSilenceTimer = () => {
@@ -354,7 +376,13 @@ async function startRelay(
         const peer: Peer = {
           send: (message) => {
             if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: 'relay_msg', to: clientId, msg: message } satisfies RelayFrame));
+              socket.send(
+                JSON.stringify({
+                  type: 'relay_msg',
+                  to: clientId,
+                  msg: message,
+                } satisfies RelayFrame),
+              );
             }
           },
         };
