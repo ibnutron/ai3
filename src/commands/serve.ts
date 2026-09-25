@@ -1,18 +1,19 @@
 import * as readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
-import { hostname } from 'node:os';
-import { basename, resolve } from 'node:path';
+import { homedir, hostname } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { ChatSession, type PromptOrigin } from '../session.js';
+import { SessionSync } from '../sessionSync.js';
 import { generateNonce, verifyChallenge } from '../auth.js';
 import { apiRequest, machineIdFor, readAuth, relayHostUrl, serverUrl, type StoredAuth } from '../config.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
 import { resolveModel } from '../models.js';
-import type { RelayFrame, WireMessage } from '../protocol.js';
+import { SESSION_SELECTOR, type RelayFrame, type WireMessage } from '../protocol.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
 
 interface ServeOptions extends PermissionOptions {
@@ -31,6 +32,15 @@ interface Peer {
   send(message: WireMessage): void;
 }
 
+/** One conversation the host serves: its clients, busy flag and open Allow/Deny prompts. */
+interface SessionRuntime {
+  session: ChatSession;
+  sync: SessionSync | null;
+  peers: Set<Peer>;
+  pendingConfirms: Map<string, (allow: boolean) => void>;
+  busy: boolean;
+}
+
 const MAX_AUTH_ATTEMPTS = 3;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
@@ -45,137 +55,192 @@ const RELAY_SILENCE_TIMEOUT_MS = 75_000;
  *   automatically.
  * - direct (`--port`): listen for WebSocket clients that authenticate with
  *   AIOLAH_REMOTE_TOKEN (LAN, self-hosting, or no aiolah account).
+ *
+ * The host can serve several sessions at once: the main one (also typed into
+ * from this terminal) plus any a client opens (`session=new`) or resumes by
+ * id. When signed in, every session is reported to aiolah's Sessions list.
  */
 export async function serveCommand(options: ServeOptions): Promise<void> {
   const workspaceRoot = resolve(options.workspace);
   const resumeId = options.resume ?? (options.continue ? findLatestSession()?.id : undefined);
   const auth = readAuth();
+  const relayMode = options.port === undefined;
 
-  if (options.port === undefined && !auth) {
+  if (relayMode && !auth) {
     throw new Error(
       'Not logged in. Run `aiolah auth login` to control this machine from aiolah, ' +
         'or pass --port to accept direct connections with AIOLAH_REMOTE_TOKEN.',
     );
   }
 
-  const peers = new Set<Peer>();
-  const pendingConfirms = new Map<string, (allow: boolean) => void>();
-  let busy = false;
+  const model = await resolveModel(options.model);
+  const permissionMode = resolvePermissionMode(options);
+  const deviceName = options.name?.trim() || `${hostname()} · ${basename(workspaceRoot) || workspaceRoot}`;
+  const hostId = relayMode ? await registerHost(auth as StoredAuth, workspaceRoot, deviceName) : undefined;
+  const runtimes = new Map<string, SessionRuntime>();
 
-  // Confirmation is answered by whoever responds first: an attached client
-  // (`confirm_reply`) or the host operator typing y/n at the main prompt.
-  // A single readline prompt is kept so we never stack two `question()`s.
-  const confirm = applyPermissionMode(
-    resolvePermissionMode(options),
-    (description: string) =>
-      new Promise<boolean>((resolveConfirm) => {
-        const id = randomBytes(6).toString('hex');
-        const timer = setTimeout(() => settle(false), CONFIRM_TIMEOUT_MS);
-        const settle = (allow: boolean) => {
-          if (!pendingConfirms.has(id)) {
-            return;
-          }
-          clearTimeout(timer);
-          pendingConfirms.delete(id);
-          resolveConfirm(allow);
-        };
-        pendingConfirms.set(id, settle);
-        broadcast({ type: 'confirm', id, description });
-        stdout.write(`\n[confirm] Allow ${description}? Type y or n here, or answer from a client.\n`);
-      }),
-  );
+  function createRuntime(sessionToResume?: string): SessionRuntime {
+    const pendingConfirms = new Map<string, (allow: boolean) => void>();
+    const peers = new Set<Peer>();
 
-  const session = new ChatSession({
-    model: await resolveModel(options.model),
-    workspaceRoot,
-    confirm,
-    resumeId,
-  });
+    // Confirmation is answered by whoever responds first: a client of this
+    // session (`confirm_reply`) or the host operator typing y/n here.
+    const confirm = applyPermissionMode(
+      permissionMode,
+      (description: string) =>
+        new Promise<boolean>((resolveConfirm) => {
+          const id = randomBytes(6).toString('hex');
+          const timer = setTimeout(() => settle(false), CONFIRM_TIMEOUT_MS);
+          const settle = (allow: boolean) => {
+            if (!pendingConfirms.has(id)) {
+              return;
+            }
+            clearTimeout(timer);
+            pendingConfirms.delete(id);
+            resolveConfirm(allow);
+          };
+          pendingConfirms.set(id, settle);
+          broadcast(runtime, { type: 'confirm', id, description });
+          stdout.write(`\n[confirm ${session.sessionId}] Allow ${description}? Type y or n here, or answer from a client.\n`);
+        }),
+    );
 
-  session.on('tool', ({ name, input }) => {
-    stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
-    broadcast({ type: 'tool', name, input });
-  });
-  session.on('tool_result', ({ name, result }) => {
-    broadcast({ type: 'tool_result', name, result });
-  });
+    const session = new ChatSession({ model, workspaceRoot, confirm, resumeId: sessionToResume });
+    session.hostId = hostId;
+    const runtime: SessionRuntime = {
+      session,
+      sync: SessionSync.attach(session, { hostId, origin: 'remote' }),
+      peers,
+      pendingConfirms,
+      busy: false,
+    };
 
-  function addPeer(peer: Peer): void {
-    peers.add(peer);
-    peer.send({
-      type: 'authed',
-      sessionId: session.sessionId,
-      workspace: workspaceRoot,
-      model: session.modelId,
-      history: session.renderHistory(),
+    session.on('tool', ({ name, input }) => {
+      stdout.write(`\n[tool ${session.sessionId}] ${name} ${JSON.stringify(input)}\n`);
+      broadcast(runtime, { type: 'tool', name, input });
     });
-    if (busy) {
-      peer.send({ type: 'busy' });
-    }
-    stdout.write('\n[remote client connected]\n');
+    session.on('tool_result', ({ name, result }) => {
+      broadcast(runtime, { type: 'tool_result', name, result });
+    });
+
+    runtimes.set(session.sessionId, runtime);
+    return runtime;
   }
 
-  async function handlePeerMessage(peer: Peer, message: WireMessage): Promise<void> {
+  const main = createRuntime(resumeId);
+
+  /** Resolves a client's session selector: none = main, `new`, a running session, or one saved on disk. */
+  function runtimeFor(selector?: string): SessionRuntime | null {
+    if (!selector) {
+      return main;
+    }
+    if (selector === 'new') {
+      return createRuntime();
+    }
+    if (!SESSION_SELECTOR.test(selector)) {
+      return null;
+    }
+    const running = runtimes.get(selector);
+    if (running) {
+      return running;
+    }
+    return existsSync(join(homedir(), '.aiolah', 'sessions', `${selector}.json`)) ? createRuntime(selector) : null;
+  }
+
+  async function addPeer(runtime: SessionRuntime, peer: Peer): Promise<void> {
+    runtime.peers.add(peer);
+    peer.send({
+      type: 'authed',
+      sessionId: runtime.session.sessionId,
+      sessionUuid: runtime.sync ? await runtime.sync.ready : null,
+      workspace: workspaceRoot,
+      model: runtime.session.modelId,
+      history: runtime.session.renderHistory(),
+    });
+    if (runtime.busy) {
+      peer.send({ type: 'busy' });
+    }
+    stdout.write(`\n[remote client connected to session ${runtime.session.sessionId}]\n`);
+  }
+
+  /** Handles a message from an authenticated client; returns the runtime the client is now attached to. */
+  async function handlePeerMessage(runtime: SessionRuntime, peer: Peer, message: WireMessage): Promise<SessionRuntime> {
+    if (message.type === 'open_session') {
+      const next = runtimeFor(message.session);
+      if (!next) {
+        peer.send({ type: 'error', text: 'unknown session' });
+        return runtime;
+      }
+      runtime.peers.delete(peer);
+      await addPeer(next, peer);
+      return next;
+    }
+
     if (message.type === 'confirm_reply') {
-      pendingConfirms.get(message.id)?.(message.allow);
-      return;
+      runtime.pendingConfirms.get(message.id)?.(message.allow);
+      return runtime;
     }
 
     if (message.type === 'user') {
-      if (busy) {
+      if (runtime.busy) {
         peer.send({ type: 'error', text: 'busy' });
-        return;
+        return runtime;
       }
-      stdout.write(`\nremote> ${message.text}\n`);
-      broadcast({ type: 'user', text: message.text }, peer);
-      await runTurn(message.text, 'remote');
+      stdout.write(`\nremote [${runtime.session.sessionId}]> ${message.text}\n`);
+      broadcast(runtime, { type: 'user', text: message.text }, peer);
+      void runTurn(runtime, message.text, 'remote');
     }
+    return runtime;
   }
 
-  async function runTurn(text: string, origin: PromptOrigin): Promise<void> {
-    busy = true;
-    broadcast({ type: 'busy' });
+  async function runTurn(runtime: SessionRuntime, text: string, origin: PromptOrigin): Promise<void> {
+    runtime.busy = true;
+    broadcast(runtime, { type: 'busy' });
     try {
-      const { reply } = await session.send(text, origin);
-      broadcast({ type: 'assistant', text: reply });
-      stdout.write(`\nassistant> ${reply}\n\n`);
+      const { reply } = await runtime.session.send(text, origin);
+      broadcast(runtime, { type: 'assistant', text: reply });
+      if (runtime === main) {
+        stdout.write(`\nassistant> ${reply}\n\n`);
+      }
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
-      broadcast({ type: 'error', text });
-      stdout.write(`\n[error] ${text}\n\n`);
+      broadcast(runtime, { type: 'error', text });
+      stdout.write(`\n[error ${runtime.session.sessionId}] ${text}\n\n`);
     } finally {
-      busy = false;
-      broadcast({ type: 'idle' });
+      runtime.busy = false;
+      broadcast(runtime, { type: 'idle' });
     }
   }
 
-  function broadcast(message: WireMessage, except?: Peer): void {
-    for (const peer of peers) {
+  function broadcast(runtime: SessionRuntime, message: WireMessage, except?: Peer): void {
+    for (const peer of runtime.peers) {
       if (peer !== except) {
         peer.send(message);
       }
     }
   }
 
-  const banner =
-    options.port === undefined
-      ? await startRelay(auth as StoredAuth, workspaceRoot, options.name, {
-          peers,
-          addPeer,
-          handlePeerMessage,
-          onRegistered: (hostId) => {
-            session.hostId = hostId;
-          },
-        })
-      : startDirect(options, {
-          addPeer,
-          handlePeerMessage,
-          removePeer: (peer) => peers.delete(peer),
-        });
+  const hooks: ServeHooks = {
+    connect: async (peer, selector) => {
+      const runtime = runtimeFor(selector);
+      if (!runtime) {
+        peer.send({ type: 'error', text: 'unknown session' });
+        return null;
+      }
+      await addPeer(runtime, peer);
+      return runtime;
+    },
+    message: handlePeerMessage,
+    disconnect: (runtime, peer) => runtime.peers.delete(peer),
+  };
+
+  const banner = relayMode
+    ? startRelay(auth as StoredAuth, hostId as number, deviceName, hooks)
+    : startDirect(options, hooks);
 
   stdout.write(
-    `aiolah serve — ${banner}\nworkspace ${workspaceRoot}, session ${session.sessionId}\n` +
-      `Type here to chat locally too. Ctrl+C to stop.\n\n`,
+    `aiolah serve — ${banner}\nworkspace ${workspaceRoot}, session ${main.session.sessionId}\n` +
+      `Type here to chat in that session too. Ctrl+C to stop.\n\n`,
   );
 
   const hostRl = readline.createInterface({ input: stdin, output: stdout });
@@ -191,28 +256,48 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     if (!trimmed) {
       continue;
     }
-    const [pendingId] = pendingConfirms.keys();
-    if (pendingId !== undefined && /^[yn]$/i.test(trimmed)) {
-      pendingConfirms.get(pendingId)?.(trimmed.toLowerCase() === 'y');
+    const waiting = [...runtimes.values()].find((runtime) => runtime.pendingConfirms.size > 0);
+    if (waiting && /^[yn]$/i.test(trimmed)) {
+      const [settle] = waiting.pendingConfirms.values();
+      settle?.(trimmed.toLowerCase() === 'y');
       continue;
     }
-    if (busy) {
+    if (main.busy) {
       stdout.write('[busy — wait for the current turn to finish]\n');
       continue;
     }
-    broadcast({ type: 'user', text: input });
-    await runTurn(input, 'terminal');
+    broadcast(main, { type: 'user', text: input });
+    await runTurn(main, input, 'terminal');
   }
 }
 
-interface DirectHooks {
-  addPeer(peer: Peer): void;
-  removePeer(peer: Peer): void;
-  handlePeerMessage(peer: Peer, message: WireMessage): Promise<void>;
+/** How a transport (direct or relay) hands clients to the session runtimes. */
+interface ServeHooks {
+  /** Attach a client to a session (none = main, `new`, or an id); null when it doesn't exist. */
+  connect(peer: Peer, selector?: string): Promise<SessionRuntime | null>;
+  message(runtime: SessionRuntime, peer: Peer, message: WireMessage): Promise<SessionRuntime>;
+  disconnect(runtime: SessionRuntime, peer: Peer): void;
+}
+
+/** Registers (or refreshes) this machine + folder as a device on aiolah and returns its id. */
+async function registerHost(auth: StoredAuth, workspaceRoot: string, name: string): Promise<number> {
+  const server = serverUrl(auth);
+  const registration = await apiRequest<{ host_id?: number }>(server, '/api/v1/app/cli/hosts', {
+    method: 'POST',
+    token: auth.token,
+    body: { machine_id: machineIdFor(workspaceRoot), name, workspace: workspaceRoot },
+  });
+  if (registration.status === 401 || registration.status === 403) {
+    throw new Error('Your aiolah login is no longer valid. Run `aiolah auth login` again.');
+  }
+  if (!registration.data.host_id) {
+    throw new Error(`Could not register this machine with ${server} (HTTP ${registration.status}).`);
+  }
+  return registration.data.host_id;
 }
 
 /** Direct mode: listen on --port, clients answer an HMAC challenge with AIOLAH_REMOTE_TOKEN. */
-function startDirect(options: ServeOptions, hooks: DirectHooks): string {
+function startDirect(options: ServeOptions, hooks: ServeHooks): string {
   const token = process.env.AIOLAH_REMOTE_TOKEN || randomBytes(16).toString('hex');
   const port = Number(options.port);
   const attemptsByIp = new Map<string, number[]>();
@@ -238,14 +323,18 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
     const nonce = generateNonce();
     const peer: Peer = { send: (message) => send(socket, message) };
     let attempts = 0;
-    let authed = false;
+    let runtime: SessionRuntime | null = null;
     send(socket, { type: 'challenge', nonce });
 
     socket.on('message', (raw) => {
       void handleIncoming(raw.toString());
     });
 
-    socket.on('close', () => hooks.removePeer(peer));
+    socket.on('close', () => {
+      if (runtime) {
+        hooks.disconnect(runtime, peer);
+      }
+    });
 
     async function handleIncoming(raw: string): Promise<void> {
       let message: WireMessage;
@@ -256,7 +345,7 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
         return;
       }
 
-      if (!authed) {
+      if (!runtime) {
         if (message.type !== 'auth') {
           send(socket, { type: 'error', text: 'expected auth' });
           return;
@@ -268,12 +357,11 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
           socket.close();
           return;
         }
-        authed = true;
-        hooks.addPeer(peer);
+        runtime = await hooks.connect(peer);
         return;
       }
 
-      await hooks.handlePeerMessage(peer, message);
+      runtime = await hooks.message(runtime, peer, message);
     }
   });
 
@@ -297,47 +385,14 @@ function startDirect(options: ServeOptions, hooks: DirectHooks): string {
   );
 }
 
-interface RelayHooks {
-  peers: Set<Peer>;
-  /** Called with the device id once aiolah has registered this machine. */
-  onRegistered(hostId: number): void;
-  addPeer(peer: Peer): void;
-  handlePeerMessage(peer: Peer, message: WireMessage): Promise<void>;
-}
-
 /**
- * Relay mode: register this machine as a device, then keep one outbound
- * WebSocket to the aiolah relay open (reconnecting with backoff). Each client
- * the relay pairs with us becomes a Peer addressed by its clientId.
+ * Relay mode: keep one outbound WebSocket to the aiolah relay open
+ * (reconnecting with backoff). Each client the relay pairs with us becomes a
+ * Peer addressed by its clientId, attached to the session it asked for.
  */
-async function startRelay(
-  auth: StoredAuth,
-  workspaceRoot: string,
-  customName: string | undefined,
-  hooks: RelayHooks,
-): Promise<string> {
+function startRelay(auth: StoredAuth, hostId: number, name: string, hooks: ServeHooks): string {
   const server = serverUrl(auth);
-  const name = customName?.trim() || `${hostname()} · ${basename(workspaceRoot) || workspaceRoot}`;
-
-  const registration = await apiRequest<{ host_id?: number }>(server, '/api/v1/app/cli/hosts', {
-    method: 'POST',
-    token: auth.token,
-    body: {
-      machine_id: machineIdFor(workspaceRoot),
-      name,
-      workspace: workspaceRoot,
-    },
-  });
-  if (registration.status === 401 || registration.status === 403) {
-    throw new Error('Your aiolah login is no longer valid. Run `aiolah auth login` again.');
-  }
-  if (!registration.data.host_id) {
-    throw new Error(`Could not register this machine with ${server} (HTTP ${registration.status}).`);
-  }
-  const hostId = registration.data.host_id;
-  hooks.onRegistered(hostId);
-
-  const relayPeers = new Map<string, Peer>();
+  const clients = new Map<string, { peer: Peer; runtime: SessionRuntime | null }>();
   let backoff = 1000;
 
   const connect = (): void => {
@@ -379,31 +434,34 @@ async function startRelay(
 
       if (frame.type === 'relay_client_joined') {
         const clientId = frame.clientId;
-        const peer: Peer = {
-          send: (message) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(
-                JSON.stringify({
-                  type: 'relay_msg',
-                  to: clientId,
-                  msg: message,
-                } satisfies RelayFrame),
-              );
-            }
+        const client = {
+          peer: {
+            send: (message: WireMessage) => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'relay_msg', to: clientId, msg: message } satisfies RelayFrame));
+              }
+            },
           },
+          runtime: null as SessionRuntime | null,
         };
-        relayPeers.set(clientId, peer);
-        hooks.addPeer(peer);
+        clients.set(clientId, client);
+        void hooks.connect(client.peer, frame.session).then((runtime) => {
+          client.runtime = runtime;
+        });
       } else if (frame.type === 'relay_client_left') {
-        const peer = relayPeers.get(frame.clientId);
-        if (peer) {
-          relayPeers.delete(frame.clientId);
-          hooks.peers.delete(peer);
+        const client = clients.get(frame.clientId);
+        if (client) {
+          clients.delete(frame.clientId);
+          if (client.runtime) {
+            hooks.disconnect(client.runtime, client.peer);
+          }
         }
       } else if (frame.type === 'relay_msg' && frame.from) {
-        const peer = relayPeers.get(frame.from);
-        if (peer) {
-          void hooks.handlePeerMessage(peer, frame.msg);
+        const client = clients.get(frame.from);
+        if (client?.runtime) {
+          void hooks.message(client.runtime, client.peer, frame.msg).then((runtime) => {
+            client.runtime = runtime;
+          });
         }
       }
     });
@@ -414,10 +472,12 @@ async function startRelay(
 
     socket.on('close', () => {
       clearTimeout(silenceTimer);
-      for (const peer of relayPeers.values()) {
-        hooks.peers.delete(peer);
+      for (const client of clients.values()) {
+        if (client.runtime) {
+          hooks.disconnect(client.runtime, client.peer);
+        }
       }
-      relayPeers.clear();
+      clients.clear();
       stdout.write(`\n[relay connection lost — retrying in ${Math.round(backoff / 1000)}s]\n`);
       setTimeout(connect, backoff);
       backoff = Math.min(backoff * 2, RELAY_BACKOFF_MAX_MS);

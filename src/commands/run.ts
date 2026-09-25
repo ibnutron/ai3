@@ -1,6 +1,7 @@
 import { stderr, stdin, stdout } from 'node:process';
 import { resolve } from 'node:path';
 import { ChatSession } from '../session.js';
+import { SessionSync } from '../sessionSync.js';
 import { findLatestSession } from '../persistence.js';
 import { resolveModel } from '../models.js';
 import { applyPermissionMode, resolvePermissionMode, type PermissionOptions } from '../permissions.js';
@@ -56,8 +57,15 @@ export async function runCommand(promptParts: string[], options: RunOptions): Pr
   session.on('tool', ({ name, input }) => {
     stderr.write(`[tool] ${name} ${JSON.stringify(input)}\n`);
   });
+  const sync = SessionSync.attach(session, { origin: 'script' });
 
-  const { reply } = await session.send(prompt, 'script');
+  let reply: string;
+  try {
+    ({ reply } = await session.send(prompt, 'script'));
+  } finally {
+    // Make sure the session reaches aiolah before the process exits.
+    await sync?.flush();
+  }
 
   if (options.outputFormat === 'json') {
     stdout.write(`${JSON.stringify({ session_id: session.sessionId, model: session.modelId, result: reply })}\n`);

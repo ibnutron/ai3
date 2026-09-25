@@ -4,7 +4,7 @@ import type { Duplex } from 'node:stream';
 import { stdout } from 'node:process';
 import WebSocket, { WebSocketServer } from 'ws';
 import { DEFAULT_SERVER } from '../config.js';
-import type { RelayFrame, WireMessage } from '../protocol.js';
+import { SESSION_SELECTOR, type RelayFrame, type WireMessage } from '../protocol.js';
 
 interface RelayOptions {
   port: string;
@@ -19,7 +19,7 @@ interface HostEntry {
 
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const PING_INTERVAL_MS = 30_000;
-const CLIENT_MESSAGE_TYPES = new Set(['user', 'confirm_reply']);
+const CLIENT_MESSAGE_TYPES = new Set(['user', 'confirm_reply', 'open_session']);
 
 /**
  * `aiolah relay` — the rendezvous point that lets a logged-in `aiolah serve`
@@ -87,7 +87,12 @@ export async function relayCommand(options: RelayOptions): Promise<void> {
         reject(socket, 401);
         return;
       }
-      wss.handleUpgrade(request, socket, head, (ws) => attachClient(ws, ticket.hostId, ticket.userId));
+      const session = url.searchParams.get('session') ?? undefined;
+      if (session !== undefined && !SESSION_SELECTOR.test(session)) {
+        reject(socket, 404);
+        return;
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => attachClient(ws, ticket.hostId, ticket.userId, session));
       return;
     }
 
@@ -136,7 +141,7 @@ export async function relayCommand(options: RelayOptions): Promise<void> {
     });
   }
 
-  function attachClient(ws: WebSocket, hostId: number, userId: number): void {
+  function attachClient(ws: WebSocket, hostId: number, userId: number, session?: string): void {
     const entry = hosts.get(hostId);
     if (!entry || entry.userId !== userId) {
       sendMessage(ws, { type: 'error', text: 'host offline' });
@@ -147,7 +152,7 @@ export async function relayCommand(options: RelayOptions): Promise<void> {
     const clientId = randomBytes(8).toString('hex');
     entry.clients.set(clientId, ws);
     track(ws);
-    sendFrame(entry.socket, { type: 'relay_client_joined', clientId });
+    sendFrame(entry.socket, { type: 'relay_client_joined', clientId, ...(session ? { session } : {}) });
 
     ws.on('message', (raw) => {
       let message: WireMessage;

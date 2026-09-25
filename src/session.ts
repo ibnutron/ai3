@@ -33,9 +33,11 @@ export interface ChatSessionOptions {
  * after every turn. Shared by the local `chat` command and the `serve`
  * command so a remote `attach` client sees the exact same conversation.
  *
- * Emits a `'tool'` event `{ name, input }` when a tool call starts and a
- * `'tool_result'` event `{ name, result }` when it finishes, so a host UI (or
- * a `serve` broadcaster) can show tool activity as it happens.
+ * Events, so a host UI, a `serve` broadcaster or the aiolah session sync can
+ * follow along: `turn_start` { text, origin }, `tool` { name, input },
+ * `tool_result` { name, result }, `confirm_wait` / `confirm_done` (an
+ * Allow/Deny prompt is open / answered), `turn_end` { reply } and
+ * `turn_error` { message }.
  */
 export class ChatSession extends EventEmitter {
   private readonly client: Anthropic;
@@ -55,7 +57,14 @@ export class ChatSession extends EventEmitter {
     ({ client: this.client, viaAiolah: this.viaAiolah } = createAnthropicClient(options.apiKey));
     this.model = options.model;
     this.workspaceRoot = options.workspaceRoot;
-    this.confirm = options.confirm;
+    this.confirm = async (description, tool) => {
+      this.emit('confirm_wait', { description, tool });
+      try {
+        return await options.confirm(description, tool);
+      } finally {
+        this.emit('confirm_done', { description, tool });
+      }
+    };
 
     if (options.resumeId) {
       const record = loadSession(options.resumeId);
@@ -115,6 +124,18 @@ export class ChatSession extends EventEmitter {
   }
 
   async send(userMessage: string, origin: PromptOrigin = 'terminal'): Promise<ChatTurnResult> {
+    this.emit('turn_start', { text: userMessage, origin });
+    try {
+      const result = await this.runTurn(userMessage, origin);
+      this.emit('turn_end', { reply: result.reply });
+      return result;
+    } catch (error) {
+      this.emit('turn_error', { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
+
+  private async runTurn(userMessage: string, origin: PromptOrigin): Promise<ChatTurnResult> {
     this.history.push({ role: 'user', content: userMessage });
 
     // Context for aiolah's prompt log; never sent to Anthropic directly.

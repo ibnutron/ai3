@@ -2,6 +2,7 @@ import * as readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { resolve } from 'node:path';
 import { ChatSession } from '../session.js';
+import { SessionSync } from '../sessionSync.js';
 import { findLatestSession } from '../persistence.js';
 import { ask } from '../prompt.js';
 import { resolveModel } from '../models.js';
@@ -30,6 +31,7 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
   session.on('tool', ({ name, input }) => {
     stdout.write(`\n[tool] ${name} ${JSON.stringify(input)}\n`);
   });
+  const sync = SessionSync.attach(session, { origin: 'terminal' });
 
   stdout.write(
     `aiolah chat — model ${session.modelId}, workspace ${workspaceRoot}, session ${session.sessionId}\n` +
@@ -55,5 +57,6 @@ export async function chatCommand(options: ChatOptions): Promise<void> {
     }
   } finally {
     rl.close();
+    await sync?.flush();
   }
 }

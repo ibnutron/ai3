@@ -6,7 +6,17 @@ export type HistoryItem =
 export type WireMessage =
   | { type: 'challenge'; nonce: string }
   | { type: 'auth'; hmac: string }
-  | { type: 'authed'; sessionId: string; workspace: string; model: string; history: HistoryItem[] }
+  | {
+      type: 'authed';
+      sessionId: string;
+      /** aiolah session uuid when the host reports sessions (signed in); null otherwise. */
+      sessionUuid?: string | null;
+      workspace: string;
+      model: string;
+      history: HistoryItem[];
+    }
+  /** Direct mode: switch this connection to another session (`new` starts one). */
+  | { type: 'open_session'; session: string }
   | { type: 'user'; text: string }
   | { type: 'assistant'; text: string }
   | { type: 'tool'; name: string; input: unknown }
@@ -24,6 +34,10 @@ export type WireMessage =
  * connection (minus the challenge, which the relay's ticket replaces).
  */
 export type RelayFrame =
-  | { type: 'relay_client_joined'; clientId: string }
+  /** `session`: id of a host session to join, `new` for a fresh one, absent = the host's main session. */
+  | { type: 'relay_client_joined'; clientId: string; session?: string }
   | { type: 'relay_client_left'; clientId: string }
   | { type: 'relay_msg'; from?: string; to?: string; msg: WireMessage };
+
+/** Session selector accepted from clients: a local session id or `new`. */
+export const SESSION_SELECTOR = /^(new|[A-Za-z0-9._-]{1,64})$/;

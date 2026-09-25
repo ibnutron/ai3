@@ -70,6 +70,12 @@ The machine appears as a device on [aiolah.com/code](https://aiolah.com/code)
 open ports, certificates or tokens. Actions that change files or run commands
 show an Allow/Deny prompt there.
 
+The Code page also lists your **sessions** — from `aiolah chat`, `aiolah -p`
+and `aiolah rc` — with their status (Working, Needs input, Ready for review,
+Completed), and you can filter, rename and archive them. **New session**
+starts another conversation on an online device; one `aiolah rc` can run
+several sessions at once. Sessions stay readable when the device is offline.
+
 ## Models
 
 ```bash
@@ -142,13 +148,17 @@ Empty values count as unset.
   recorded together with the model, device, session id and CLI version. Tool
   results and file contents in follow-up steps are sent to the model but not
   logged as prompts.
+- **Sessions are saved to your account.** When signed in, each session's
+  prompts, answers, tool calls and tool results (including file contents, up
+  to 20 KB per result) are sent to aiolah so they can be read on the Code page
+  even when the device is offline.
 - **Your own key bypasses aiolah.** With `ANTHROPIC_API_KEY` set, model calls go
   straight to Anthropic and aiolah does not see or log them.
 - **Local history.** Full sessions (conversation, tool calls, file contents) are
   saved as plain JSON in `~/.aiolah/sessions/` on the machine running the agent.
   Your login token is in `~/.aiolah/auth.json` (mode 0600).
 - **The relay keeps nothing.** Remote-control messages pass through the aiolah
-  relay without being stored.
+  relay without being stored (the session sync above is a separate HTTPS call).
 
 ## Troubleshooting
 
@@ -198,9 +208,13 @@ JSON messages over one WebSocket:
    `{type:"auth", hmac}` with `hmac = hex(HMAC-SHA256(key = token, message = nonce))`.
    Wrong answer → `{type:"error", text:"unauthorized"}` and the socket closes.
    Relay clients skip this step (the ticket authenticates them).
-2. Server → `{type:"authed", sessionId, workspace, model, history}`, where
-   `history` holds `{role:"user"|"assistant", text}` and
-   `{role:"tool", name, input, result}` items.
+2. Server → `{type:"authed", sessionId, sessionUuid, workspace, model, history}`,
+   where `history` holds `{role:"user"|"assistant", text}` and
+   `{role:"tool", name, input, result}` items, and `sessionUuid` is the aiolah
+   session id when the host is signed in (else `null`).
+   A host serves several sessions: relay clients pick one with
+   `/client?ticket=…&session=<id>|new` (no parameter = the host's main
+   session); any client can switch with `{type:"open_session", session}`.
 3. Client → `{type:"user", text}` starts a turn. The server sends
    `{type:"busy"}`, then `{type:"tool", name, input}` /
    `{type:"tool_result", name, result}` per tool call, then
